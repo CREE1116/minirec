@@ -11,7 +11,9 @@ class Trainer:
         self.config, self.model, self.data_loader = config, model, data_loader
         self.device = model.device
         self.model.to(self.device)
-        self.output_path = config.get('output_path_override', 'output/default')
+        
+        # 기본 출력 경로 설정 (우선순위: override > config > default 'output')
+        self.output_path = config.get('output_path_override', config.get('output_path', 'output'))
         os.makedirs(self.output_path, exist_ok=True)
         
         # 닫힌 해(fit) 모델인지 SGD(calc_loss) 모델인지 확인

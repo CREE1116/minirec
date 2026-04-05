@@ -14,7 +14,7 @@ class BaseModel(nn.Module):
         else:
             self.device = torch.device(device_str)
             
-        self.output_path = config.get('output_path_override', 'output/default')
+        self.output_path = config.get('output_path_override', config.get('output_path', 'output'))
 
     def forward(self, user_indices):
         raise NotImplementedError

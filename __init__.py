@@ -10,48 +10,46 @@ from .src.models import get_model
 from .src.trainer import Trainer
 from .src.hpo.optimizer import BayesianOptimizer
 
-def set_seed(seed=42):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+from .src.utils.seed import set_seed
 
 def run(dataset_cfg, model_cfg, output_path=None, hpo_mode=False):
     """
     단일 실험 실행 함수.
-    dataset_cfg: dict 또는 yaml 경로
-    model_cfg: dict 또는 yaml 경로
-    output_path: 결과 저장 경로
     """
     # 1. Load/Merge Configs
     if isinstance(dataset_cfg, str): dataset_cfg = load_yaml(dataset_cfg)
     if isinstance(model_cfg, str): model_cfg = load_yaml(model_cfg)
     
-    config = merge_all_configs(dataset_cfg, model_cfg)
-    if output_path: config['output_path_override'] = output_path
-    if hpo_mode: config['hpo_mode'] = True
+    # 데이터셋 설정에서 시드 확인 (없으면 None으로 넘겨서 랜덤 생성 유도)
+    config_seed = dataset_cfg.get('seed')
+    current_seed = set_seed(config_seed)
     
-    # 2. Setup Device & Seed
-    set_seed(config.get('seed', 42))
-    if config.get('device', 'auto') == 'auto':
-        config['device'] = 'cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu')
+    # 2. Setup Config
+    config = merge_all_configs(dataset_cfg, model_cfg)
+    config['seed'] = current_seed
+    
+    # 기본 출력 경로 설정
+    if output_path is None:
+        output_path = config.get('output_path_override', 'output')
+    config['output_path_override'] = output_path
+    if hpo_mode: config['hpo_mode'] = True
     
     # 3. Load Data & Model
     data_loader = DataLoader(config)
-    model = get_model(config['model']['name'], config, data_loader)
     
-    # 4. Train & Evaluate
+    # 4. Get Model & Device
+    model_name = config.get('model_name', config.get('model', {}).get('name', 'MF'))
+    model = get_model(model_name, config, data_loader)
+    
+    # 5. Train & Evaluate
     trainer = Trainer(config, model, data_loader)
     return trainer.run()
 
 def hporun(dataset_cfg, model_cfg, hpo_cfg, n_trials=20):
     """
-    하이퍼파라미터 탐색 실행 함수.
-    hpo_cfg: { 'metric': 'NDCG@10', 'direction': 'max', 'params': [...] }
+    하이퍼파라미터 탐색 실행 함수 (멀티시드 지원).
     """
+    # BayesianOptimizer가 hpo_cfg를 통해 멀티시드를 처리함
     optimizer = BayesianOptimizer(run, dataset_cfg, model_cfg, hpo_cfg)
     best_params = optimizer.search(n_trials=n_trials)
     

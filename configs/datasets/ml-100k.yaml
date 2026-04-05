@@ -1,0 +1,25 @@
+# MovieLens 100k Dataset Configuration
+dataset_name: 'ml-100k'
+data_path: 'data/ml-100k/u.data'
+separator: "\t"
+columns: ['user_id', 'item_id', 'rating', 'timestamp']
+has_header: false
+
+# Preprocessing
+min_user_interactions: 5
+min_item_interactions: 0
+rating_threshold: 0
+dedup: true
+
+# Splitting
+split_method: 'loo'  # loo, rs, temporal
+train_ratio: 0.8
+valid_ratio: 0.1
+seed: 42
+
+# Global Evaluation Defaults
+evaluation:
+  main_metric: 'NDCG'
+  main_metric_k: 10
+  metrics: ['Recall', 'NDCG', 'MRR']
+  top_k: [10, 20, 50]

@@ -7,6 +7,7 @@
 - **Unified Interface**: `minirec.run()`과 `minirec.hporun()`으로 모든 실험 제어.
 - **Dual-Path Execution**: 모델 구조에 따라 최적의 학습 경로(Closed-form vs SGD) 자동 선택.
 - **Config-First Design**: 모든 실험 파라미터를 YAML 또는 Dictionary로 관리.
+- **Support List**: [Implemented Models & Metrics](docs/MODELS_AND_METRICS.md) 상세 리스트 제공.
 - **Smart Caching**: 전처리된 데이터를 피클 파일로 자동 저장하여 반복 로딩 시간 단축.
 - **Flexible Splitting**: `LOO`, `Random Split`, `Temporal Split` 등 필수 분할 방식 완벽 지원.
 

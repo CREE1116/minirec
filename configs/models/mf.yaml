@@ -1,0 +1,13 @@
+# Matrix Factorization (BPR-MF)
+model_name: 'MF'
+embedding_dim: 64
+device: 'auto'
+
+train:
+  epochs: 50
+  batch_size: 1024
+  lr: 0.001
+  weight_decay: 0.0001
+  loss_type: 'pairwise'  # BPR loss
+  num_negatives: 1
+  negative_sampling_strategy: 'uniform'

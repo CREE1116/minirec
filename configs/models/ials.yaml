@@ -1,0 +1,7 @@
+# iALS (Implicit Alternating Least Squares)
+model_name: 'iALS'
+embedding_dim: 64
+reg_lambda: 0.1
+alpha: 40.0
+n_iters: 15
+device: 'auto'

@@ -1,0 +1,4 @@
+# PureSVD (Pure Singular Value Decomposition)
+model_name: 'PureSVD'
+embedding_dim: 100
+device: 'auto'

@@ -1,0 +1,4 @@
+# EASE (Embarrassingly Shallow Autoencoders)
+model_name: 'EASE'
+reg_lambda: 500.0  # L2 정규화 계수
+device: 'auto'

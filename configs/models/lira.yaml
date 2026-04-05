@@ -1,0 +1,4 @@
+# LIRA (Linear Item-Item Recommendation Algorithm)
+model_name: 'LIRA'
+reg_lambda: 100.0
+device: 'auto'

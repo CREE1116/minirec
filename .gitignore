@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+.venv
+build/
+dist/
+*.egg-info/
+
+# Project Specific
+data_cache/
+output/
+data/
+.DS_Store
+.ipynb_checkpoints/

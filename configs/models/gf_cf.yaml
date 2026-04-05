@@ -1,0 +1,5 @@
+# GF-CF (Graph Filter based Collaborative Filtering)
+model_name: 'GF-CF'
+alpha: 0.1
+k: 5
+device: 'auto'

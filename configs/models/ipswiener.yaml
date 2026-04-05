@@ -1,0 +1,5 @@
+model:
+  model_name: "ipswiener"
+  reg_lambda: 100.0
+  alpha: 0.5
+  device: "auto"

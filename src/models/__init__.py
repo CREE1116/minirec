@@ -7,6 +7,8 @@ from .lightgcn import LightGCN
 from .ips_lae import IPS_LAE
 from .lira import LIRA
 from .dlae import DLAE
+from .ipsdlae import IPSDLAE
+from .ipswiener import IPSWiener
 
 MODEL_REGISTRY = {
     'ease': EASE,
@@ -17,7 +19,9 @@ MODEL_REGISTRY = {
     'lightgcn': LightGCN,
     'ips_lae': IPS_LAE,
     'lira': LIRA,
-    'dlae': DLAE
+    'dlae': DLAE,
+    'ipsdlae': IPSDLAE,
+    'ipswiener': IPSWiener
 }
 
 def get_model(model_name, config, data_loader):

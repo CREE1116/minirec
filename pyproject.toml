@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "implicit>=0.7.2",
+    "matplotlib>=3.10.8",
     "numpy>=2.4.4",
     "optuna>=4.8.0",
     "pandas>=3.0.2",

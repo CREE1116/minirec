@@ -138,7 +138,12 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device, user_hi
     user_gt = defaultdict(list)
     for u, i in zip(all_users_np, all_items_np): user_gt[u].append(i)
     unique_users = sorted(list(user_gt.keys()))
-    results = {f'{m}@{k}': [] for k in top_k_list for m in metrics_list}
+    
+    # metrics_list에서 _evaluate_full이 직접 계산하는 것들만 results에 포함
+    core_metrics = ['HitRate', 'Recall', 'Precision', 'NDCG', 'LongTailHitRate', 'LongTailNDCG', 'HeadHitRate', 'HeadNDCG']
+    active_core_metrics = [m for m in metrics_list if m in core_metrics]
+    
+    results = {f'{m}@{k}': [] for k in top_k_list for m in active_core_metrics}
     all_top_k = []
     
     pop_ratio_raw = {k: [] for k in top_k_list}
@@ -158,10 +163,14 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device, user_hi
             for idx, u_id in enumerate(u_ids):
                 seen = user_history.get(u_id, set())
                 gt = set(user_gt[u_id])
+                # seen 아이템 중 gt가 아닌 것만 마스킹 대상으로 지정
                 exclude = [it for it in seen if it not in gt]
                 mask_rows.extend([idx] * len(exclude))
                 mask_cols.extend(exclude)
-            if mask_rows: scores[mask_rows, mask_cols] = -1e9
+            
+            if mask_rows:
+                # 마스킹: 학습에 사용된 아이템들을 최하위 점수로 밀어냄
+                scores[mask_rows, mask_cols] = -1e10
 
             _, top_indices = torch.topk(scores, k=max_k, dim=1)
             top_indices = top_indices.cpu().numpy()
@@ -211,15 +220,15 @@ def evaluate_metrics(model, data_loader, eval_config, device, test_loader, is_fi
     item_norms = None
     if any(m in metrics_list for m in ['ILD', 'GiniIndex_emb']):
         with torch.no_grad():
-            if hasattr(model, 'item_embedding') and hasattr(model.item_embedding, 'weight'):
+            # MF 모델 등에서 임베딩 가중치 가져오기
+            if hasattr(model, 'item_emb') and hasattr(model.item_emb, 'weight'):
+                emb_for_ild = model.item_emb.weight
+            elif hasattr(model, 'item_embedding') and hasattr(model.item_embedding, 'weight'):
                 emb_for_ild = model.item_embedding.weight
+            
             if 'GiniIndex_emb' in metrics_list and emb_for_ild is not None:
                 item_norms = torch.norm(emb_for_ild, dim=1).detach().cpu().numpy()
 
-    if 'GiniIndex' in metrics_list:
-        all_recs = [it for sub in all_top_k for it in sub]
-        final_results['GiniIndex'] = get_gini_index_from_recs(all_recs, data_loader.n_items)
-    
     if 'GiniIndex_emb' in metrics_list and item_norms is not None:
         final_results['GiniIndex_emb'] = get_gini_index_emb(item_norms)
 
@@ -231,6 +240,8 @@ def evaluate_metrics(model, data_loader, eval_config, device, test_loader, is_fi
             final_results[f'ILD@{k}'] = get_ild(recs_at_k, emb_for_ild)
         if 'Coverage' in metrics_list:
             final_results[f'Coverage@{k}'] = get_coverage(flat_at_k, data_loader.n_items)
+        if 'GiniIndex' in metrics_list:
+            final_results[f'GiniIndex@{k}'] = get_gini_index_from_recs(flat_at_k, data_loader.n_items)
         if 'LongTailCoverage' in metrics_list:
             tail_set = get_long_tail_item_set(item_pop, lt_percent)
             final_results[f'LongTailCoverage@{k}'] = get_long_tail_coverage(flat_at_k, item_pop, lt_percent, tail_set)

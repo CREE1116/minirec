@@ -1,7 +1,7 @@
-# MovieLens 100k Dataset Configuration
-dataset_name: "ml-100k"
-data_path: "data/ml100k/u.data"
-separator: "\t"
+# MovieLens 1M Dataset Configuration
+dataset_name: "ml-1m"
+data_path: "data/ml1m/ratings.dat"
+separator: "::"
 columns: ["user_id", "item_id", "rating", "timestamp"]
 has_header: false
 

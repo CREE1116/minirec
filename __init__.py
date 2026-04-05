@@ -4,13 +4,13 @@ import random
 import numpy as np
 
 # src 폴더 내부의 핵심 로직들을 노출
-from .src.utils.config import merge_all_configs, load_yaml
-from .src.data.loader import DataLoader
-from .src.models import get_model
-from .src.trainer import Trainer
-from .src.hpo.optimizer import BayesianOptimizer
+from src.utils.config import merge_all_configs, load_yaml
+from src.data.loader import DataLoader
+from src.models import get_model
+from src.trainer import Trainer
+from src.hpo.optimizer import BayesianOptimizer
 
-from .src.utils.seed import set_seed
+from src.utils.seed import set_seed
 
 def run(dataset_cfg, model_cfg, output_path=None, hpo_mode=False):
     """
@@ -38,7 +38,12 @@ def run(dataset_cfg, model_cfg, output_path=None, hpo_mode=False):
     data_loader = DataLoader(config)
     
     # 4. Get Model & Device
-    model_name = config.get('model_name', config.get('model', {}).get('name', 'MF'))
+    model_name = config.get('model_name')
+    if not model_name and 'model' in config:
+        model_name = config['model'].get('model_name', config['model'].get('name', 'MF'))
+    else:
+        model_name = model_name or 'MF'
+        
     model = get_model(model_name, config, data_loader)
     
     # 5. Train & Evaluate
@@ -51,7 +56,7 @@ def hporun(dataset_cfg, model_cfg, hpo_cfg, n_trials=20):
     """
     # BayesianOptimizer가 hpo_cfg를 통해 멀티시드를 처리함
     optimizer = BayesianOptimizer(run, dataset_cfg, model_cfg, hpo_cfg)
-    best_params = optimizer.search(n_trials=n_trials)
+    summary = optimizer.search(n_trials=n_trials)
     
-    print(f"HPO Finished. Best Params: {best_params}")
-    return best_params
+    print(f"HPO Finished.")
+    return summary

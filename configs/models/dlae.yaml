@@ -1,0 +1,5 @@
+model:
+  model_name: "DLAE"
+  reg_lambda: 100.0
+  dropout_p: 0.5
+  device: "auto"

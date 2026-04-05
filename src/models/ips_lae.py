@@ -8,7 +8,7 @@ class IPS_LAE(BaseModel):
         super().__init__(config, data_loader)
         self.reg_lambda = config['model'].get('reg_lambda', 500.0)
         self.wbeta = config['model'].get('wbeta', 0.4)
-        self.wtype = config['model'].get('wtype', 'powerlaw') # powerlaw | logsigmoid
+        self.wtype = config['model'].get('wtype', 'logsigmoid') # powerlaw | logsigmoid
         self.weight_matrix = None
         self.train_matrix = None
 

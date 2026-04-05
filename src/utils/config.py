@@ -36,6 +36,10 @@ def merge_all_configs(dataset_config, model_config, eval_config_path=None):
             
     eval_config = load_yaml(eval_config_path)
     
+    # eval_config의 내용이 'evaluation' 키 아래에 있지 않다면 감싸줌 (Trainer 등에서 config['evaluation']을 참조함)
+    if eval_config and 'evaluation' not in eval_config:
+        eval_config = {'evaluation': eval_config}
+    
     # 1. eval + dataset
     config = deep_merge(eval_config, dataset_config)
     # 2. (eval+dataset) + model

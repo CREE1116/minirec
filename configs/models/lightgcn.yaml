@@ -1,15 +1,18 @@
-# LightGCN (Graph Convolutional Networks)
-model_name: 'LightGCN'
-embedding_dim: 64
-n_layers: 3
-keep_prob: 0.8
-device: 'auto'
+model:
+  # LightGCN (Graph Convolutional Networks)
+  model_name: 'LightGCN'
+  embedding_dim: 64
+  n_layers: 3
+  keep_prob: 0.8
+  device: 'auto'
+  
+  train:
+    epochs: 200
+    batch_size: 2048
+    lr: 0.001
+    weight_decay: 1e-4
+    patience: 15
+    loss_type: 'pairwise'
 
-train:
-  epochs: 100
-  batch_size: 2048
-  lr: 0.001
-  weight_decay: 1e-4
-  loss_type: 'pairwise'
-  num_negatives: 1
-  negative_sampling_strategy: 'uniform'
+    num_negatives: 1
+    negative_sampling_strategy: 'uniform'

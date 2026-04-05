@@ -1,5 +1,6 @@
-# IPS-LAE (Inverse Propensity Scoring - Linear AutoEncoder)
-model_name: 'IPS-LAE'
-reg_lambda: 100.0
-propensity_gamma: 0.5
-device: 'auto'
+model:
+  # IPS-LAE (Inverse Propensity Scoring - Linear AutoEncoder)
+  model_name: "ips_lae"
+  reg_lambda: 100.0
+  propensity_gamma: 0.5
+  device: "auto"

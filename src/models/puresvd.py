@@ -7,7 +7,8 @@ from .base import BaseModel
 class PureSVD(BaseModel):
     def __init__(self, config, data_loader):
         super().__init__(config, data_loader)
-        self.embedding_dim = config['model'].get('embedding_dim', 64)
+        # HPO에서 'k'를 제안할 경우 이를 최우선으로 사용 (embedding_dim보다 우선)
+        self.embedding_dim = config['model'].get('k', config['model'].get('embedding_dim', 64))
         self.user_factors = None
         self.item_factors = None
 
@@ -18,6 +19,7 @@ class PureSVD(BaseModel):
                           shape=(self.n_users, self.n_items), dtype=np.float32)
         
         # SVD: X \approx U * S * V^T
+        # k는 min(dim, n_users-1, n_items-1)이어야 함
         k = min(self.embedding_dim, min(X.shape) - 1)
         u, s, vt = svds(X, k=k)
         

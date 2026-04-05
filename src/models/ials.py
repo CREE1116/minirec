@@ -32,7 +32,7 @@ class iALS(BaseModel):
             alpha=self.alpha,
             iterations=self.max_iter,
             random_state=self.config.get('seed', 42),
-            use_gpu=False # CPU for stability in minirec
+            # use_gpu=False # CPU for stability in minirec
         )
         model.fit(X, show_progress=True)
         

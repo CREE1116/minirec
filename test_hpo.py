@@ -5,6 +5,10 @@ import pandas as pd
 import glob
 sys.path.append(os.getcwd())
 import __init__ as minirec
+from src.utils.config import load_yaml
+
+_eval_cfg = load_yaml('configs/evaluation.yaml')
+_main_metric = f"{_eval_cfg.get('main_metric', 'NDCG')}@{_eval_cfg.get('main_metric_k', 20)}"
 
 # 1. 대상 데이터셋 리스트
 datasets = [
@@ -61,7 +65,6 @@ experiments = [
 ]
 
 hpo_cfg = {
-    'metric': 'NDCG@20',
     'direction': 'max',
     'n_seeds': 3,
     'patience': 10
@@ -161,6 +164,6 @@ for d_cfg_path in datasets:
         )
         
         # 모델 하나가 끝날 때마다 디스크의 파일들을 읽어 리포트 최신화
-        generate_reports_from_files(report_output_root, hpo_results_root, hpo_cfg['metric'])
+        generate_reports_from_files(report_output_root, hpo_results_root, _main_metric)
 
 print(f"\n{'='*80}\n✨ All experiments finished! Final results are in '{report_output_root}'\n{'='*80}")

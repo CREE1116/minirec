@@ -16,8 +16,7 @@ class IPSWiener(BaseModel):
         X = self.get_train_matrix(data_loader)
         self.train_matrix = X
 
-        G = torch.sparse.mm(X.t(), X.to_dense()).to(self.device)
-
+        G = X.t() @ X
         d = G.diagonal()
         d_inv = 1.0 / (torch.pow(d, self.alpha) + self.eps)
         G_tilde = G * d_inv.unsqueeze(1) * d_inv.unsqueeze(0)
@@ -28,9 +27,7 @@ class IPSWiener(BaseModel):
         print("IPSWiener fitting complete.")
 
     def forward(self, user_indices):
-        if not hasattr(self, 'train_matrix_dense'):
-            self.train_matrix_dense = self.train_matrix.to_dense().to(self.device)
-        return self.train_matrix_dense[user_indices] @ self.weight_matrix
+        return self.train_matrix[user_indices] @ self.weight_matrix
 
     def calc_loss(self, batch_data):
         return (torch.tensor(0.0, device=self.device),), None

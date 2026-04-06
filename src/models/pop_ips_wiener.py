@@ -20,14 +20,12 @@ class PopIPSWiener(BaseModel):
         X = self.get_train_matrix(data_loader)
         self.train_matrix = X
 
-        item_pop = torch.sparse.sum(X, dim=0).to_dense()
-        max_pop = torch.max(item_pop)
-        propensity = torch.pow(item_pop / (max_pop + self.eps), self.propensity_gamma)
+        item_pop = X.sum(dim=0)
+        propensity = torch.pow(item_pop / (torch.max(item_pop) + self.eps), self.propensity_gamma)
         propensity = torch.clamp(propensity, 0.01, 1.0)
         sqrt_inv_prop = torch.sqrt(1.0 / (propensity + self.eps))
 
-        G = torch.sparse.mm(X.t(), X.to_dense()).to(self.device)
-        sqrt_inv_prop = sqrt_inv_prop.to(self.device)
+        G = X.t() @ X
         G_ips = G * sqrt_inv_prop.unsqueeze(1) * sqrt_inv_prop.unsqueeze(0)
 
         A = G_ips.clone()
@@ -36,9 +34,7 @@ class PopIPSWiener(BaseModel):
         print("PopIPSWiener fitting complete.")
 
     def forward(self, user_indices):
-        if not hasattr(self, 'train_matrix_dense'):
-            self.train_matrix_dense = self.train_matrix.to_dense().to(self.device)
-        return self.train_matrix_dense[user_indices] @ self.weight_matrix
+        return self.train_matrix[user_indices] @ self.weight_matrix
 
     def calc_loss(self, batch_data):
         return (torch.tensor(0.0, device=self.device),), None

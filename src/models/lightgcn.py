@@ -20,8 +20,8 @@ class LightGCN(BaseModel):
         self.final_item_emb = None
 
     def _get_norm_adj(self, data_loader):
+        # Adjacency is (n_users+n_items)^2 — keep sparse to avoid OOM
         adj = data_loader.get_interaction_graph(add_self_loops=False)
-        # Keep sparse on CPU for MPS; only move to device for CUDA
         if self.device.type == 'cuda':
             adj = adj.to(self.device)
         row_sum = torch.sparse.sum(adj, dim=1).to_dense()
@@ -38,7 +38,7 @@ class LightGCN(BaseModel):
         all_emb = torch.cat([self.user_embedding.weight, self.item_embedding.weight], dim=0)
         embs = [all_emb]
         for _ in range(self.n_layers):
-            # sparse.mm requires tensors on the same device; move to CPU for MPS
+            # MPS does not support sparse mm; fall back to CPU for this op
             if self.device.type == 'mps':
                 all_emb = torch.sparse.mm(self.norm_adj, all_emb.cpu()).to(self.device)
             else:
@@ -61,11 +61,9 @@ class LightGCN(BaseModel):
         p_idx = batch_data['pos_item_id'].squeeze()
         n_idx = batch_data['neg_item_id'].squeeze()
 
-        u_e = u_f[u_idx]
-        p_e = i_f[p_idx]
-        n_e = i_f[n_idx]
-
+        u_e, p_e, n_e = u_f[u_idx], i_f[p_idx], i_f[n_idx]
         pos_scores = (u_e * p_e).sum(dim=-1)
+
         if n_e.dim() == 3:
             neg_scores = (u_e.unsqueeze(1) * n_e).sum(dim=-1)
             loss = -F.logsigmoid(pos_scores.unsqueeze(1) - neg_scores).mean()

@@ -34,23 +34,16 @@ class iALS(BaseModel):
         FTF = fixed_factors.t() @ fixed_factors
         new_factors = torch.zeros_like(factors)
 
-        indices = X.indices()
-        if not is_user:
-            indices = indices.flip(0)
+        interactions = X if is_user else X.t()
 
-        owner_ids = indices[0]
-        other_ids = indices[1].to(self.device)
-
-        unique_owners, counts = torch.unique_consecutive(owner_ids, return_counts=True)
-        curr_idx = 0
-
-        for owner_id, count in zip(unique_owners, counts):
-            others = other_ids[curr_idx : curr_idx + count]
-            F_i = fixed_factors[others]
+        for i in range(interactions.shape[0]):
+            nz = interactions[i].nonzero(as_tuple=True)[0]
+            if len(nz) == 0:
+                continue
+            F_i = fixed_factors[nz]
             LHS = FTF + self.alpha * (F_i.t() @ F_i) + reg_id
             RHS = (1 + self.alpha) * F_i.sum(dim=0)
-            new_factors[owner_id] = torch.linalg.solve(LHS, RHS)
-            curr_idx += count
+            new_factors[i] = torch.linalg.solve(LHS, RHS)
 
         return new_factors
 

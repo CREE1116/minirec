@@ -17,14 +17,12 @@ class EnergyWiener(BaseModel):
 
     def fit(self, data_loader):
         print(f"Fitting EnergyWiener (alpha={self.alpha}, lambda={self.reg_lambda}) on {self.device}...")
-        self.train_matrix = self.get_train_matrix(data_loader)
-        X = self.train_matrix
+        X = self.get_train_matrix(data_loader)
+        self.train_matrix = X
 
-        G = torch.sparse.mm(X.t(), X.to_dense()).to(self.device)
-
+        G = X.t() @ X
         d = G.diagonal()
-        S = G.sum(dim=1)
-        influence = (d ** 2) / (S + self.eps)
+        influence = (d ** 2) / (G.sum(dim=1) + self.eps)
         d_inv = torch.pow(influence + self.eps, -self.alpha / 2.0)
         G_tilde = G * d_inv.unsqueeze(1) * d_inv.unsqueeze(0)
 
@@ -34,9 +32,7 @@ class EnergyWiener(BaseModel):
         print("EnergyWiener fitting complete.")
 
     def forward(self, user_indices):
-        if not hasattr(self, 'train_matrix_dense'):
-            self.train_matrix_dense = self.train_matrix.to_dense().to(self.device)
-        return self.train_matrix_dense[user_indices] @ self.weight_matrix
+        return self.train_matrix[user_indices] @ self.weight_matrix
 
     def calc_loss(self, batch_data):
         return (torch.tensor(0.0, device=self.device),), None

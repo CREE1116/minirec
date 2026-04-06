@@ -18,18 +18,16 @@ class EnergyDLAE(BaseModel):
 
     def fit(self, data_loader):
         print(f"Fitting EnergyDLAE (p={self.dropout_p}, alpha={self.alpha}, lambda={self.reg_lambda}) on {self.device}...")
-        self.train_matrix = self.get_train_matrix(data_loader)
-        X = self.train_matrix
+        X = self.get_train_matrix(data_loader)
+        self.train_matrix = X
 
-        G = torch.sparse.mm(X.t(), X.to_dense()).to(self.device)
-
+        G = X.t() @ X
         row_energy = torch.sqrt(torch.sum(torch.square(G), dim=1))
         e_inv = 1.0 / (torch.pow(row_energy + self.eps, self.alpha))
         G_tilde = G * e_inv.unsqueeze(1) * e_inv.unsqueeze(0)
 
-        g_tilde_diag = G_tilde.diagonal()
         p = min(self.dropout_p, 0.99)
-        w = (p / (1.0 - p + self.eps)) * g_tilde_diag
+        w = (p / (1.0 - p + self.eps)) * G_tilde.diagonal()
 
         A = G_tilde.clone()
         A.diagonal().add_(w + self.reg_lambda)
@@ -37,9 +35,7 @@ class EnergyDLAE(BaseModel):
         print("EnergyDLAE fitting complete.")
 
     def forward(self, user_indices):
-        if not hasattr(self, 'train_matrix_dense'):
-            self.train_matrix_dense = self.train_matrix.to_dense().to(self.device)
-        return self.train_matrix_dense[user_indices] @ self.weight_matrix
+        return self.train_matrix[user_indices] @ self.weight_matrix
 
     def calc_loss(self, batch_data):
         return (torch.tensor(0.0, device=self.device),), None

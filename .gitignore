@@ -15,6 +15,6 @@ dist/
 # Project Specific
 data_cache/
 output/
-data/
+/data/
 .DS_Store
 .ipynb_checkpoints/

@@ -25,9 +25,8 @@ class iALS(BaseModel):
         cols = train_df['item_id'].values
         vals = np.ones(len(rows), dtype=np.float32)
 
-        # implicit expects item×user CSR matrix
+        # implicit 0.7+: fit()은 user×item CSR 행렬을 받음
         user_items = sp.csr_matrix((vals, (rows, cols)), shape=(self.n_users, self.n_items))
-        item_users = user_items.T.tocsr()
 
         model = AlternatingLeastSquares(
             factors=self.embedding_dim,
@@ -36,7 +35,7 @@ class iALS(BaseModel):
             iterations=self.max_iter,
             use_gpu=use_gpu,
         )
-        model.fit(item_users)
+        model.fit(user_items)
 
         self.user_embedding.weight.data.copy_(
             torch.from_numpy(model.user_factors).to(self.device))

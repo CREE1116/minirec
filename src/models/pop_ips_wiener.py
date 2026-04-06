@@ -26,7 +26,7 @@ class PopIPSWiener(BaseModel):
         propensity = torch.clamp(propensity, 0.01, 1.0)
         sqrt_inv_prop = torch.sqrt(1.0 / (propensity + self.eps))
 
-        G = torch.sparse.mm(X.t(), X).to_dense().to(self.device)
+        G = torch.sparse.mm(X.t(), X.to_dense()).to(self.device)
         sqrt_inv_prop = sqrt_inv_prop.to(self.device)
         G_ips = G * sqrt_inv_prop.unsqueeze(1) * sqrt_inv_prop.unsqueeze(0)
 

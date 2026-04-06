@@ -14,7 +14,7 @@ class EASE(BaseModel):
         X = self.get_train_matrix(data_loader)
         self.train_matrix = X
 
-        G = torch.sparse.mm(X.t(), X).to_dense().to(self.device)
+        G = torch.sparse.mm(X.t(), X.to_dense()).to(self.device)
         G.diagonal().add_(self.reg_lambda)
         P = torch.linalg.inv(G)
         B = P / (-P.diagonal())

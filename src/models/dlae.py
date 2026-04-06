@@ -15,7 +15,7 @@ class DLAE(BaseModel):
         X = self.get_train_matrix(data_loader)
         self.train_matrix = X
 
-        G = X.t() @ X
+        G = torch.sparse.mm(X.t(), X.to_dense()).to(self.device)
         p = min(self.dropout_p, 0.99)
         w = (p / (1.0 - p)) * G.diagonal()
 
@@ -25,7 +25,9 @@ class DLAE(BaseModel):
         print("DLAE fitting complete.")
 
     def forward(self, user_indices):
-        return self.train_matrix[user_indices] @ self.weight_matrix
+        if not hasattr(self, 'train_matrix_dense'):
+            self.train_matrix_dense = self.train_matrix.to_dense().to(self.device)
+        return self.train_matrix_dense[user_indices] @ self.weight_matrix
 
     def calc_loss(self, batch_data):
         return (torch.tensor(0.0, device=self.device),), None

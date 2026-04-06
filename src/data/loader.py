@@ -221,11 +221,11 @@ class DataLoader:
         return PyTorchDataLoader(ds, batch_size=batch_size, shuffle=True, collate_fn=ds.collate_fn)
 
     def get_validation_loader(self, batch_size):
-        ds = TensorDataset(torch.LongTensor(self.valid_df['user_id'].values), torch.LongTensor(self.valid_df['item_id'].values))
+        ds = TensorDataset(torch.LongTensor(self.valid_df['user_id'].values.copy()), torch.LongTensor(self.valid_df['item_id'].values.copy()))
         return PyTorchDataLoader(ds, batch_size=batch_size, shuffle=False)
 
     def get_final_loader(self, batch_size):
-        ds = TensorDataset(torch.LongTensor(self.test_df['user_id'].values), torch.LongTensor(self.test_df['item_id'].values))
+        ds = TensorDataset(torch.LongTensor(self.test_df['user_id'].values.copy()), torch.LongTensor(self.test_df['item_id'].values.copy()))
         return PyTorchDataLoader(ds, batch_size=batch_size, shuffle=False)
 
 # ============================================================

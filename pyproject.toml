@@ -3,7 +3,7 @@ name = "minirec"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = "~=3.11.14"
 dependencies = [
     "implicit>=0.7.2",
     "matplotlib>=3.10.8",
@@ -11,7 +11,22 @@ dependencies = [
     "optuna>=4.8.0",
     "pandas>=3.0.2",
     "pyyaml>=6.0.3",
+    "scikit-learn>=1.6.1",
     "scipy>=1.17.1",
     "torch>=2.11.0",
     "tqdm>=4.67.3",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  # 1순위: 리눅스나 윈도우에서는 CUDA 전용 인덱스 시도
+  { index = "pytorch-cuda", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+  # 2순위: 1순위 조건에 해당하더라도 인덱스에 패키지가 없으면(실패하면) 기본 PyPI 사용
+  { marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+  # 3순위: 그 외 플랫폼(macOS 등)은 자동으로 기본 PyPI 사용
 ]

@@ -18,11 +18,10 @@ class HybridWiener(BaseModel):
 
     def fit(self, data_loader):
         print(f"Fitting HybridWiener (alpha={self.alpha}, gamma={self.gamma}, lambda={self.reg_lambda}) on {self.device}...")
-        self.train_matrix = self.get_train_matrix(data_loader)
-        X = self.train_matrix
+        X = self.get_train_matrix(data_loader)
+        self.train_matrix = X
 
-        G = torch.sparse.mm(X.t(), X.to_dense()).to(self.device)
-
+        G = X.t() @ X
         d = G.diagonal()
         e = torch.sqrt(torch.sum(torch.square(G), dim=1))
         s = (1.0 - self.gamma) * d + self.gamma * e
@@ -35,9 +34,7 @@ class HybridWiener(BaseModel):
         print("HybridWiener fitting complete.")
 
     def forward(self, user_indices):
-        if not hasattr(self, 'train_matrix_dense'):
-            self.train_matrix_dense = self.train_matrix.to_dense().to(self.device)
-        return self.train_matrix_dense[user_indices] @ self.weight_matrix
+        return self.train_matrix[user_indices] @ self.weight_matrix
 
     def calc_loss(self, batch_data):
         return (torch.tensor(0.0, device=self.device),), None

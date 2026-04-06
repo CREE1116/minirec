@@ -17,26 +17,21 @@ class IPSDLAE(BaseModel):
         X = self.get_train_matrix(data_loader)
         self.train_matrix = X
 
-        G = torch.sparse.mm(X.t(), X.to_dense()).to(self.device)
-
+        G = X.t() @ X
         d = G.diagonal()
         d_inv = 1.0 / (torch.pow(d, self.alpha) + self.eps)
         G_tilde = G * d_inv.unsqueeze(1) * d_inv.unsqueeze(0)
 
-        g_diag = G.diagonal()
         p = min(self.dropout_p, 0.99)
-        w = (p / (1.0 - p + self.eps)) * g_diag
-        L_diag = w + self.reg_lambda
+        w = (p / (1.0 - p + self.eps)) * G.diagonal()
 
         A = G_tilde.clone()
-        A.diagonal().add_(L_diag)
+        A.diagonal().add_(w + self.reg_lambda)
         self.weight_matrix = torch.linalg.solve(A, G_tilde)
         print("IPSDLAE fitting complete.")
 
     def forward(self, user_indices):
-        if not hasattr(self, 'train_matrix_dense'):
-            self.train_matrix_dense = self.train_matrix.to_dense().to(self.device)
-        return self.train_matrix_dense[user_indices] @ self.weight_matrix
+        return self.train_matrix[user_indices] @ self.weight_matrix
 
     def calc_loss(self, batch_data):
         return (torch.tensor(0.0, device=self.device),), None

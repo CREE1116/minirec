@@ -17,8 +17,7 @@ class iALS(BaseModel):
         self.item_embedding = nn.Embedding(self.n_items, self.embedding_dim)
 
     def fit(self, data_loader):
-        use_gpu = self.device.type == 'cuda'
-        print(f"Fitting iALS (dim={self.embedding_dim}, alpha={self.alpha}) via implicit (gpu={use_gpu})...")
+        print(f"Fitting iALS (dim={self.embedding_dim}, alpha={self.alpha}) via implicit (cpu)...")
 
         train_df = data_loader.train_df
         rows = train_df['user_id'].values
@@ -28,25 +27,14 @@ class iALS(BaseModel):
         # implicit 0.7+: fit()은 user×item CSR 행렬을 받음
         user_items = sp.csr_matrix((vals, (rows, cols)), shape=(self.n_users, self.n_items))
 
-        def _make_model(use_gpu):
-            return AlternatingLeastSquares(
-                factors=self.embedding_dim,
-                regularization=self.reg_lambda,
-                alpha=self.alpha,
-                iterations=self.max_iter,
-                use_gpu=use_gpu,
-            )
-
-        model = _make_model(use_gpu)
-        try:
-            model.fit(user_items)
-        except ValueError as e:
-            if use_gpu and 'CUDA' in str(e):
-                print(f"[iALS] GPU extension unavailable, falling back to CPU...")
-                model = _make_model(False)
-                model.fit(user_items)
-            else:
-                raise
+        model = AlternatingLeastSquares(
+            factors=self.embedding_dim,
+            regularization=self.reg_lambda,
+            alpha=self.alpha,
+            iterations=self.max_iter,
+            use_gpu=False,
+        )
+        model.fit(user_items)
 
         self.user_embedding.weight.data.copy_(
             torch.from_numpy(model.user_factors).to(self.device))

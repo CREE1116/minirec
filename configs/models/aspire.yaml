@@ -1,4 +1,5 @@
 model:
   name: aspire
   reg_lambda: 100.0
-  alpha: 0.5 # 2nd-order energy normalization strength
+  alpha: 2.0 # 2nd-order energy normalization strength
+  beta: 0.0 # Bayesian anchoring parameter

@@ -11,7 +11,7 @@ class PureSVD(BaseModel):
         self.item_factors = None
 
     def fit(self, data_loader):
-        k_cache = self.config.get('svd_cache_k', 1000)
+        k_cache = self.config.get('svd_cache_k', 2000)
         svd_data = get_svd_cache(data_loader, k_max=k_cache)
 
         k = min(self.embedding_dim, len(svd_data['s']))

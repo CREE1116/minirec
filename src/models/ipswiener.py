@@ -18,7 +18,7 @@ class IPSWiener(BaseModel):
 
         G = torch.sparse.mm(X.t(), X.to_dense()).to(self.device)
         d = G.diagonal()
-        d_inv = 1.0 / (torch.pow(d, self.alpha) + self.eps)
+        d_inv = 1.0 / (torch.pow(d, self.alpha/2) + self.eps)
         G_tilde = G * d_inv.unsqueeze(1) * d_inv.unsqueeze(0)
 
         A = G_tilde.clone()

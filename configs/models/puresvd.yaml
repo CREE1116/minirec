@@ -1,5 +1,6 @@
 model:
   # PureSVD (Pure Singular Value Decomposition)
   model_name: 'PureSVD'
-  embedding_dim: 100
+  embedding_dim: 256 # Updated default
   device: 'auto'
+  svd_cache_k: 2000 # Explicitly set cache limit

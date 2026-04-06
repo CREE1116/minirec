@@ -53,8 +53,12 @@ class BayesianOptimizer:
             temp_config = merge_all_configs(self.dataset_cfg, self.model_cfg)
             print(f"[HPO] Loading DataLoader to determine max_k...")
             temp_dl = DataLoader(temp_config)
-            self._max_k = min(temp_dl.n_users, temp_dl.n_items) - 1
-            print(f"[HPO] Determined max_k: {self._max_k}")
+            
+            # 현실적인 최대 k값 설정 (아이템 수 vs 2000 중 작은 값)
+            data_full_rank = min(temp_dl.n_users, temp_dl.n_items) - 1
+            self._max_k = min(data_full_rank, 2000)
+            
+            print(f"[HPO] Determined max_k: {self._max_k} (Full Rank: {data_full_rank})")
         return self._max_k
 
     def objective(self, trial, current_seed):

@@ -29,6 +29,17 @@ class BayesianOptimizer:
             
         self.patience = hpo_cfg.get('patience', 20)
         self.params_list = hpo_cfg.get('params', [])
+
+        # SGD 모델은 early stopping 기준(main_metric)과 HPO objective가 달라지면
+        # _best_val_metrics에서 원하는 metric을 찾지 못해 objective가 0.0이 됨
+        from src.utils.config import load_yaml as _load_yaml, merge_all_configs as _merge
+        _eval_cfg = _merge(self.dataset_cfg, self.model_cfg).get('evaluation', {})
+        _expected = f"{_eval_cfg.get('main_metric', 'NDCG')}@{_eval_cfg.get('main_metric_k', 20)}"
+        if self.metric != _expected:
+            print(f"[HPO WARNING] hpo_cfg metric='{self.metric}' differs from "
+                  f"evaluation main_metric='{_expected}'. "
+                  f"SGD models may silently return 0.0 as HPO objective. "
+                  f"Consider aligning hpo_cfg metric with main_metric.")
         
         self.dataset_name = self.dataset_cfg.get('dataset_name', 'unknown_data').lower()
         m_name = self.model_cfg.get('model_name')

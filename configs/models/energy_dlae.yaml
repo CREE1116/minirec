@@ -1,5 +1,0 @@
-model:
-  name: energy_dlae
-  reg_lambda: 100.0
-  dropout_p: 0.5
-  alpha: 0.5 # Energy-based symmetric normalization strength

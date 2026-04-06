@@ -24,9 +24,7 @@
 | IPS-DLAE | `IPSDLAE` | IPS + Dropout 마스킹 결합 |
 | IPS-Wiener | `IPSWiener` | IPS + Wiener Filter (Pure Ridge, Diagonal zeroing 없음) |
 | Pop-IPS-Wiener | `PopIPSWiener` | Popularity-aware IPS + Wiener Filter |
-| Energy-Wiener | `EnergyWiener` | Energy-normalized Wiener Filter |
-| Hybrid-Wiener | `HybridWiener` | IPS + Energy 혼합 정규화 Wiener Filter |
-| Energy-DLAE | `EnergyDLAE` | Energy-normalized DLAE |
+| Aspire | `Aspire` | Energy-normalized Wiener Filter |
 
 ### SGD 모델 (반복 학습)
 

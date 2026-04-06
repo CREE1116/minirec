@@ -1,5 +1,0 @@
-model:
-  name: hybrid_wiener
-  reg_lambda: 100.0
-  alpha: 0.5 
-  gamma: 0.5 # Mixing ratio. 0: Popularity only, 1: Energy only

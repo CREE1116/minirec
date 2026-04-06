@@ -10,9 +10,7 @@ from .dlae import DLAE
 from .ipsdlae import IPSDLAE
 from .ipswiener import IPSWiener
 from .pop_ips_wiener import PopIPSWiener
-from .energy_wiener import EnergyWiener
-from .hybrid_wiener import HybridWiener
-from .energy_dlae import EnergyDLAE
+from .aspire import Aspire
 
 MODEL_REGISTRY = {
     'ease': EASE,
@@ -27,9 +25,7 @@ MODEL_REGISTRY = {
     'ipsdlae': IPSDLAE,
     'ipswiener': IPSWiener,
     'pop_ips_wiener': PopIPSWiener,
-    'energy_wiener': EnergyWiener,
-    'hybrid_wiener': HybridWiener,
-    'energy_dlae': EnergyDLAE
+    'aspire': Aspire
 }
 
 def get_model(model_name, config, data_loader):

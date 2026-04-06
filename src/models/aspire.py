@@ -2,37 +2,34 @@ import torch
 import torch.nn as nn
 from .base import BaseModel
 
-class EnergyDLAE(BaseModel):
+class Aspire(BaseModel):
     """
-    Energy-based DLAE: combines DLAE's dropout regularization with 2nd-order energy normalization.
-    G_tilde = E^-alpha * G * E^-alpha, W = (G_tilde + diag(p/(1-p)*g_tilde + lambda))^-1 * G_tilde
+    Degree-Ratio Symmetric Wiener Filter.
+    Influence I = d^2 / S, G_tilde = I^(-alpha/2) * G * I^(-alpha/2)
     """
     def __init__(self, config, data_loader):
         super().__init__(config, data_loader)
         self.reg_lambda = config['model'].get('reg_lambda', 100.0)
-        self.dropout_p = config['model'].get('dropout_p', 0.5)
         self.alpha = config['model'].get('alpha', 0.5)
         self.eps = 1e-12
         self.weight_matrix = None
         self.train_matrix = None
 
     def fit(self, data_loader):
-        print(f"Fitting EnergyDLAE (p={self.dropout_p}, alpha={self.alpha}, lambda={self.reg_lambda}) on {self.device}...")
+        print(f"Fitting Aspire (alpha={self.alpha}, lambda={self.reg_lambda}) on {self.device}...")
         X = self.get_train_matrix(data_loader)
         self.train_matrix = X
 
         G = torch.sparse.mm(X.t(), X.to_dense()).to(self.device)
-        row_energy = torch.sqrt(torch.sum(torch.square(G), dim=1))
-        e_inv = 1.0 / (torch.pow(row_energy + self.eps, self.alpha))
-        G_tilde = G * e_inv.unsqueeze(1) * e_inv.unsqueeze(0)
-
-        p = min(self.dropout_p, 0.99)
-        w = (p / (1.0 - p + self.eps)) * G_tilde.diagonal()
+        d = G.diagonal()
+        influence = (d ** 2) / (G.sum(dim=1) + self.eps)
+        d_inv = torch.pow(influence + self.eps, -self.alpha / 2.0)
+        G_tilde = G * d_inv.unsqueeze(1) * d_inv.unsqueeze(0)
 
         A = G_tilde.clone()
-        A.diagonal().add_(w + self.reg_lambda)
+        A.diagonal().add_(self.reg_lambda)
         self.weight_matrix = torch.linalg.solve(A, G_tilde)
-        print("EnergyDLAE fitting complete.")
+        print("Aspire fitting complete.")
 
     def forward(self, user_indices):
         if not hasattr(self, 'train_matrix_dense'):

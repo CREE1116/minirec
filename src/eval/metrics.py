@@ -198,13 +198,13 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device, user_hi
                             if 'HeadNDCG' in metrics_list: results[f'HeadNDCG@{k}'].append(get_ndcg(pk, head_gt))
                     
                     if 'PopRatio' in metrics_list and mean_pop is not None:
-                        hits = [it for it in pk if it in gt]
-                        if hits: pop_ratio_raw[k].append(np.mean([get_pop_ratio(it, item_popularity, mean_pop) for it in hits]))
+                        # 추천 아이템 전체 대상으로 계산 (hit 여부 무관)
+                        pop_ratio_raw[k].append(np.mean([get_pop_ratio(it, item_popularity, mean_pop) for it in pk]))
 
     final = {k: np.nanmean(v) if v else 0.0 for k, v in results.items()}
     if 'PopRatio' in metrics_list:
         for k in top_k_list: final[f'PopRatio@{k}'] = np.mean(pop_ratio_raw[k]) if pop_ratio_raw[k] else 0.0
-    return final, all_top_k
+    return final, all_top_k, tail_item_set
 
 def evaluate_metrics(model, data_loader, eval_config, device, test_loader, is_final=False):
     top_k_list = eval_config.get('top_k', [10])
@@ -213,8 +213,8 @@ def evaluate_metrics(model, data_loader, eval_config, device, test_loader, is_fi
     item_pop = data_loader.item_popularity
     lt_percent = eval_config.get('long_tail_percent', 0.8)
     
-    final_results, all_top_k = _evaluate_full(model, test_loader, top_k_list, metrics_list, device, history, item_pop, lt_percent)
-    
+    final_results, all_top_k, precomputed_tail_set = _evaluate_full(model, test_loader, top_k_list, metrics_list, device, history, item_pop, lt_percent)
+
     # Global/Diversity Metrics
     emb_for_ild = None
     item_norms = None
@@ -225,7 +225,7 @@ def evaluate_metrics(model, data_loader, eval_config, device, test_loader, is_fi
                 emb_for_ild = model.item_emb.weight
             elif hasattr(model, 'item_embedding') and hasattr(model.item_embedding, 'weight'):
                 emb_for_ild = model.item_embedding.weight
-            
+
             if 'GiniIndex_emb' in metrics_list and emb_for_ild is not None:
                 item_norms = torch.norm(emb_for_ild, dim=1).detach().cpu().numpy()
 
@@ -235,7 +235,7 @@ def evaluate_metrics(model, data_loader, eval_config, device, test_loader, is_fi
     for k in top_k_list:
         recs_at_k = [sub[:k] for sub in all_top_k]
         flat_at_k = [it for sub in recs_at_k for it in sub]
-        
+
         if 'ILD' in metrics_list and emb_for_ild is not None:
             final_results[f'ILD@{k}'] = get_ild(recs_at_k, emb_for_ild)
         if 'Coverage' in metrics_list:
@@ -243,8 +243,8 @@ def evaluate_metrics(model, data_loader, eval_config, device, test_loader, is_fi
         if 'GiniIndex' in metrics_list:
             final_results[f'GiniIndex@{k}'] = get_gini_index_from_recs(flat_at_k, data_loader.n_items)
         if 'LongTailCoverage' in metrics_list:
-            tail_set = get_long_tail_item_set(item_pop, lt_percent)
-            final_results[f'LongTailCoverage@{k}'] = get_long_tail_coverage(flat_at_k, item_pop, lt_percent, tail_set)
+            # _evaluate_full에서 이미 계산한 tail_set 재사용
+            final_results[f'LongTailCoverage@{k}'] = get_long_tail_coverage(flat_at_k, item_pop, lt_percent, precomputed_tail_set)
         if 'Novelty' in metrics_list:
             final_results[f'Novelty@{k}'] = get_novelty(flat_at_k, item_pop)
         if 'Entropy' in metrics_list:

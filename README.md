@@ -139,21 +139,7 @@ minirec/
 │   │   └── loader.py        # 데이터 로딩, 분할, 캐싱, 그래프 생성
 │   ├── models/
 │   │   ├── base.py          # BaseModel (nn.Module)
-│   │   ├── ease.py          # EASE
-│   │   ├── lira.py          # LIRA
-│   │   ├── dlae.py          # DLAE
-│   │   ├── puresvd.py       # PureSVD
-│   │   ├── ials.py          # iALS
-│   │   ├── gf_cf.py         # GF-CF
-│   │   ├── ips_lae.py       # IPS-LAE
-│   │   ├── ipsdlae.py       # IPS-DLAE
-│   │   ├── ipswiener.py     # IPS-Wiener
-│   │   ├── pop_ips_wiener.py # Pop-IPS-Wiener
-│   │   ├── energy_wiener.py # Energy-Wiener
-│   │   ├── hybrid_wiener.py # Hybrid-Wiener
-│   │   ├── energy_dlae.py   # Energy-DLAE
-│   │   ├── mf.py            # BPR-MF
-│   │   └── lightgcn.py      # LightGCN
+│   │   └── ...              # 이외의 구현체들
 │   ├── eval/
 │   │   └── metrics.py       # 전체 평가 메트릭 계산
 │   ├── hpo/
@@ -181,12 +167,24 @@ minirec/
 method: "full"
 top_k: [10, 20, 50]
 metrics:
-  ["Recall", "NDCG", "HitRate", "Precision",
-   "LongTailRecall", "LongTailNDCG", "HeadRecall", "HeadNDCG",
-   "Coverage", "LongTailCoverage", "Novelty", "GiniIndex", "PopRatio"]
-main_metric: "NDCG"    # HPO objective 및 early stopping 기준
+  [
+    "Recall",
+    "NDCG",
+    "HitRate",
+    "Precision",
+    "LongTailRecall",
+    "LongTailNDCG",
+    "HeadRecall",
+    "HeadNDCG",
+    "Coverage",
+    "LongTailCoverage",
+    "Novelty",
+    "GiniIndex",
+    "PopRatio",
+  ]
+main_metric: "NDCG" # HPO objective 및 early stopping 기준
 main_metric_k: 20
-long_tail_percent: 0.8  # 상위 80% interaction volume을 head로 정의
+long_tail_percent: 0.8 # 상위 80% interaction volume을 head로 정의
 ```
 
 ### dataset yaml
@@ -200,10 +198,10 @@ has_header: false
 
 min_user_interactions: 5
 min_item_interactions: 0
-rating_threshold: 0      # 0이면 필터링 안 함
+rating_threshold: 0 # 0이면 필터링 안 함
 dedup: true
 
-split_method: "temporal_rs"  # loo | rs | temporal_rs
+split_method: "temporal_rs" # loo | rs | temporal_rs
 train_ratio: 0.8
 valid_ratio: 0.1
 seed: 42
@@ -213,18 +211,18 @@ seed: 42
 
 ```yaml
 model:
-  model_name: 'EASE'
+  model_name: "EASE"
   reg_lambda: 500.0
-  device: 'auto'         # auto | cpu | cuda
+  device: "auto" # auto | cpu | cuda
 ```
 
 ### model yaml (SGD 예시)
 
 ```yaml
 model:
-  model_name: 'MF'
+  model_name: "MF"
   embedding_dim: 64
-  device: 'auto'
+  device: "auto"
 
   train:
     epochs: 100
@@ -233,7 +231,7 @@ model:
     weight_decay: 0.0001
     patience: 10
     num_negatives: 1
-    negative_sampling_strategy: 'uniform'  # uniform | popularity
+    negative_sampling_strategy: "uniform" # uniform | popularity
 ```
 
 ---
@@ -242,14 +240,14 @@ model:
 
 논문 수준의 공정성을 위해 다음 프로토콜을 따릅니다.
 
-| 항목 | 내용 |
-|------|------|
-| 평가 방식 | Full-ranking (전체 아이템 대상, 샘플링 없음) |
-| 학습 아이템 마스킹 | 평가 시 유저의 학습 아이템을 -1e10으로 마스킹 |
-| HPO | Validation set 기준으로만 하이퍼파라미터 선택 |
-| 최종 평가 | Test set 단 1회 |
-| item_popularity | Train set만 기준으로 계산 (test 정보 미사용) |
-| 멀티시드 | 각 시드 독립적으로 HPO → test 평가 → 평균/표준편차 리포트 |
+| 항목               | 내용                                                      |
+| ------------------ | --------------------------------------------------------- |
+| 평가 방식          | Full-ranking (전체 아이템 대상, 샘플링 없음)              |
+| 학습 아이템 마스킹 | 평가 시 유저의 학습 아이템을 -1e10으로 마스킹             |
+| HPO                | Validation set 기준으로만 하이퍼파라미터 선택             |
+| 최종 평가          | Test set 단 1회                                           |
+| item_popularity    | Train set만 기준으로 계산 (test 정보 미사용)              |
+| 멀티시드           | 각 시드 독립적으로 HPO → test 평가 → 평균/표준편차 리포트 |
 
 ---
 

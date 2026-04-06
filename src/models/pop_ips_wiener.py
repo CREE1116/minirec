@@ -1,6 +1,5 @@
 import torch
-import numpy as np
-import scipy.sparse as sp
+import torch.nn as nn
 from .base import BaseModel
 
 class PopIPSWiener(BaseModel):
@@ -16,23 +15,21 @@ class PopIPSWiener(BaseModel):
         self.eps = 1e-8
         
         self.weight_matrix = None
-        self.train_matrix = sp.csr_matrix((self.n_users, self.n_items))
+        self.train_matrix = None
 
     def fit(self, data_loader):
-        print(f"Fitting PopIPSWiener (gamma={self.propensity_gamma}, lambda={self.reg_lambda})...")
-        train_df = data_loader.train_df
-        rows, cols = train_df['user_id'].values, train_df['item_id'].values
-        X = sp.csr_matrix((np.ones(len(rows)), (rows, cols)), 
-                          shape=(self.n_users, self.n_items), dtype=np.float32)
+        print(f"Fitting PopIPSWiener (gamma={self.propensity_gamma}, lambda={self.reg_lambda}) on {self.device}...")
+        
+        X = self.get_train_matrix(data_loader)
         self.train_matrix = X
         
         # 1. Item Popularity (propensity source)
-        item_pop = np.array(X.sum(axis=0)).flatten()
-        max_pop = np.max(item_pop)
+        item_pop = torch.sparse.sum(X, dim=0).to_dense()
+        max_pop = torch.max(item_pop)
         
         # 2. Traditional Power-law Propensity: pi = (pop / max_pop)^gamma
-        propensity = np.power(item_pop / (max_pop + self.eps), self.propensity_gamma)
-        propensity = np.clip(propensity, 0.01, 1.0) # Stability clip
+        propensity = torch.pow(item_pop / (max_pop + self.eps), self.propensity_gamma)
+        propensity = torch.clamp(propensity, 0.01, 1.0) # Stability clip
         
         # 3. Explicit IPS Weighting: W = diag(1/pi)
         inv_prop = 1.0 / (propensity + self.eps)
@@ -40,23 +37,29 @@ class PopIPSWiener(BaseModel):
         # G_ips = X^T * W * X
         # To compute this efficiently: X_weighted = X * sqrt(W)
         # Then G_ips = X_weighted^T * X_weighted
-        sqrt_inv_prop = np.sqrt(inv_prop)
-        X_weighted = X.multiply(sqrt_inv_prop)
+        # Scaling columns of X by sqrt_inv_prop
+        sqrt_inv_prop = torch.sqrt(inv_prop)
         
-        G_ips = (X_weighted.T @ X_weighted).toarray()
+        # G = X'X
+        G = torch.sparse.mm(X.t(), X).to_dense()
+        
+        # G_ips = diag(sqrt_inv_prop) @ G @ diag(sqrt_inv_prop)
+        G_ips = G * sqrt_inv_prop.unsqueeze(1) * sqrt_inv_prop.unsqueeze(0)
         
         # 4. Solve Wiener Filter (Ridge): (G_ips + lambda * I) B = G_ips
-        A = G_ips.copy()
-        np.fill_diagonal(A, np.diag(A) + self.reg_lambda)
+        A = G_ips.clone()
+        A.diagonal().add_(self.reg_lambda)
         
-        B = np.linalg.solve(A, G_ips)
+        B = torch.linalg.solve(A, G_ips)
         
-        self.weight_matrix = torch.from_numpy(B).float().to(self.device)
+        self.weight_matrix = B
         print("PopIPSWiener fitting complete.")
 
     def forward(self, user_indices):
-        u_ids = user_indices.cpu().numpy()
-        user_vec = torch.from_numpy(self.train_matrix[u_ids].toarray()).float().to(self.device)
+        if not hasattr(self, 'train_matrix_dense'):
+            self.train_matrix_dense = self.train_matrix.to_dense()
+            
+        user_vec = self.train_matrix_dense[user_indices]
         return user_vec @ self.weight_matrix
 
     def calc_loss(self, batch_data):

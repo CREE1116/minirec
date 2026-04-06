@@ -37,16 +37,15 @@ class iALS(BaseModel):
                 use_gpu=use_gpu,
             )
 
-        model = _make_model(use_gpu)
         try:
-            model.fit(user_items)
+            model = _make_model(use_gpu)
         except ValueError as e:
             if use_gpu and 'CUDA' in str(e):
                 print(f"[iALS] GPU extension unavailable, falling back to CPU...")
                 model = _make_model(False)
-                model.fit(user_items)
             else:
                 raise
+        model.fit(user_items)
 
         self.user_embedding.weight.data.copy_(
             torch.from_numpy(model.user_factors).to(self.device))

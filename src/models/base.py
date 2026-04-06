@@ -26,11 +26,12 @@ class BaseModel(nn.Module):
         rows = torch.tensor(train_df['user_id'].values, dtype=torch.long)
         cols = torch.tensor(train_df['item_id'].values, dtype=torch.long)
         values = torch.ones(len(rows), dtype=dtype)
-        mat = torch.sparse_coo_tensor(
-            torch.stack([rows, cols]),
-            values,
-            (self.n_users, self.n_items)
-        )
+        with torch.sparse.check_sparse_tensor_invariants(False):
+            mat = torch.sparse_coo_tensor(
+                torch.stack([rows, cols]),
+                values,
+                (self.n_users, self.n_items)
+            )
         # MPS does not support sparse ops; keep on CPU for MPS and let models move dense results to device
         if self.device.type == 'cuda':
             mat = mat.to(self.device)

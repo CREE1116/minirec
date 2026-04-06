@@ -124,18 +124,28 @@ class DataLoader:
     def _process_data(self):
         print(f"[DataLoader] Processing raw data: {self.config.get('dataset_name')}...")
         df = load_raw_data(self.config['data_path'], self.config['separator'], self.config['columns'], self.config.get('has_header', False))
-        
+        n_raw = len(df)
+        print(f"  raw interactions : {n_raw:,}")
+
         if self.config.get('rating_threshold', 0) > 0:
             rating_col = self.config['columns'][2]
             df = df[df[rating_col] >= self.config['rating_threshold']]
-            
+            print(f"  after rating threshold ({self.config['rating_threshold']}): {len(df):,}  (-{n_raw - len(df):,})")
+
         if self.config.get('dedup', True):
+            before = len(df)
             df = df.drop_duplicates(subset=['user_id', 'item_id'], keep='last')
-            
+            if before - len(df):
+                print(f"  after dedup      : {len(df):,}  (-{before - len(df):,})")
+
+        before = len(df)
         df = filter_interactions(df, self.config.get('min_user_interactions', 5), self.config.get('min_item_interactions', 5))
+        print(f"  after k-core     : {len(df):,}  (-{before - len(df):,})")
+
         self.df, self.user_map, self.item_map, self.n_users, self.n_items = remap_ids(df)
-        
-        # 분할 로직 매핑
+        density = len(df) / (self.n_users * self.n_items) * 100
+        print(f"  users={self.n_users:,}  items={self.n_items:,}  interactions={len(df):,}  density={density:.4f}%")
+
         split_method = self.config.get('split_method', 'loo').lower()
         tr = self.config.get('train_ratio', 0.8)
         vr = self.config.get('valid_ratio', 0.1)
@@ -149,11 +159,12 @@ class DataLoader:
             self.train_df, self.valid_df, self.test_df = split_temporal_ratio(self.df, tr, vr)
         else:
             raise ValueError(f"Unknown split method: {split_method}")
-        
+
+        print(f"  split ({split_method})  train={len(self.train_df):,}  valid={len(self.valid_df):,}  test={len(self.test_df):,}")
+
         self.train_user_history = self.train_df.groupby('user_id')['item_id'].agg(set).to_dict()
         self.eval_user_history = pd.concat([self.train_df, self.valid_df]).groupby('user_id')['item_id'].agg(set).to_dict()
 
-        # item_popularity은 훈련 데이터만 사용하여 계산 (test 정보 누출 방지)
         train_counts = self.train_df['item_id'].value_counts()
         self.item_popularity = train_counts.reindex(range(self.n_items), fill_value=0).sort_index().values
 

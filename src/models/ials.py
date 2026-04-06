@@ -28,14 +28,25 @@ class iALS(BaseModel):
         # implicit 0.7+: fit()은 user×item CSR 행렬을 받음
         user_items = sp.csr_matrix((vals, (rows, cols)), shape=(self.n_users, self.n_items))
 
-        model = AlternatingLeastSquares(
-            factors=self.embedding_dim,
-            regularization=self.reg_lambda,
-            alpha=self.alpha,
-            iterations=self.max_iter,
-            use_gpu=use_gpu,
-        )
-        model.fit(user_items)
+        def _make_model(use_gpu):
+            return AlternatingLeastSquares(
+                factors=self.embedding_dim,
+                regularization=self.reg_lambda,
+                alpha=self.alpha,
+                iterations=self.max_iter,
+                use_gpu=use_gpu,
+            )
+
+        model = _make_model(use_gpu)
+        try:
+            model.fit(user_items)
+        except ValueError as e:
+            if use_gpu and 'CUDA' in str(e):
+                print(f"[iALS] GPU extension unavailable, falling back to CPU...")
+                model = _make_model(False)
+                model.fit(user_items)
+            else:
+                raise
 
         self.user_embedding.weight.data.copy_(
             torch.from_numpy(model.user_factors).to(self.device))

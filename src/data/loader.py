@@ -143,6 +143,9 @@ class DataLoader:
         print(f"  after k-core     : {len(df):,}  (-{before - len(df):,})")
 
         self.df, self.user_map, self.item_map, self.n_users, self.n_items = remap_ids(df)
+        if self.n_users == 0 or self.n_items == 0:
+            raise ValueError(f"No data left after filtering for dataset: {self.config.get('dataset_name')}. Check your rating_threshold or k-core settings.")
+            
         density = len(df) / (self.n_users * self.n_items) * 100
         print(f"  users={self.n_users:,}  items={self.n_items:,}  interactions={len(df):,}  density={density:.4f}%")
 

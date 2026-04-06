@@ -13,7 +13,7 @@ dependencies = [
     "pyyaml>=6.0.3",
     "scikit-learn>=1.6.1",
     "scipy>=1.17.1",
-    "torch>=2.11.0",
+    "torch>=2.0.0",
     "tqdm>=4.67.3",
 ]
 
@@ -24,9 +24,7 @@ explicit = true
 
 [tool.uv.sources]
 torch = [
-  # 1순위: 리눅스나 윈도우에서는 CUDA 전용 인덱스 시도
+  # 1. 리눅스/윈도우에서 CUDA 버전 우선 시도
   { index = "pytorch-cuda", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
-  # 2순위: 1순위 조건에 해당하더라도 인덱스에 패키지가 없으면(실패하면) 기본 PyPI 사용
-  { marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
-  # 3순위: 그 외 플랫폼(macOS 등)은 자동으로 기본 PyPI 사용
+  # 2. CUDA 버전 탐색에 실패하거나 타 플랫폼(macOS)일 경우 기본 PyPI 사용 (명시적 비워둠)
 ]

@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from tqdm import tqdm
 from .base import BaseModel
 
 class iALS(BaseModel):
@@ -22,14 +23,13 @@ class iALS(BaseModel):
         U = self.user_embedding.weight
 
         for iteration in range(self.max_iter):
-            U = self._als_step(X, U, Y, is_user=True)
+            U = self._als_step(X, U, Y, is_user=True,  desc=f"[{iteration+1}/{self.max_iter}] users")
             self.user_embedding.weight.data.copy_(U)
-            Y = self._als_step(X, Y, U, is_user=False)
+            Y = self._als_step(X, Y, U, is_user=False, desc=f"[{iteration+1}/{self.max_iter}] items")
             self.item_embedding.weight.data.copy_(Y)
-            print(f"  Iteration {iteration+1}/{self.max_iter} complete.")
         print("iALS fitting complete.")
 
-    def _als_step(self, X, factors, fixed_factors, is_user=True):
+    def _als_step(self, X, factors, fixed_factors, is_user=True, desc=""):
         reg_id = torch.eye(self.embedding_dim, device=self.device) * self.reg_lambda
         FTF = fixed_factors.t() @ fixed_factors
         new_factors = torch.zeros_like(factors)
@@ -43,7 +43,7 @@ class iALS(BaseModel):
 
         unique_owners, counts = torch.unique_consecutive(owner_ids, return_counts=True)
         curr_idx = 0
-        for owner_id, count in zip(unique_owners, counts):
+        for owner_id, count in tqdm(zip(unique_owners, counts), total=len(unique_owners), desc=desc, leave=False):
             others = other_ids[curr_idx : curr_idx + count]
             F_i = fixed_factors[others]
             LHS = FTF + self.alpha * (F_i.t() @ F_i) + reg_id

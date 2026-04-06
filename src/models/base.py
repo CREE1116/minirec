@@ -25,9 +25,16 @@ class BaseModel(nn.Module):
         train_df = data_loader.train_df
         rows = torch.tensor(train_df['user_id'].values, dtype=torch.long)
         cols = torch.tensor(train_df['item_id'].values, dtype=torch.long)
-        X = torch.zeros(self.n_users, self.n_items, dtype=dtype, device=self.device)
-        X[rows, cols] = 1.0
-        return X
+        values = torch.ones(len(rows), dtype=dtype)
+        mat = torch.sparse_coo_tensor(
+            torch.stack([rows, cols]),
+            values,
+            (self.n_users, self.n_items)
+        )
+        # MPS does not support sparse ops; keep on CPU for MPS and let models move dense results to device
+        if self.device.type == 'cuda':
+            mat = mat.to(self.device)
+        return mat.coalesce()
 
     def forward(self, user_indices):
         raise NotImplementedError

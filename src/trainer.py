@@ -35,12 +35,16 @@ class Trainer:
         # Path 1: Closed-form (EASE, iALS, etc.)
         if self.has_fit:
             self.model.fit(self.data_loader)
-        
+
         # Path 2: SGD Training (MF, LightGCN, MultiVAE, etc.)
         if self.is_sgd:
             self._train_loop()
-        
-        # Final Path: Always Evaluate
+
+        # HPO 모드: validation 결과 반환 (test set 노출 금지)
+        if self.hpo_mode:
+            return self.evaluate(is_final=False)
+
+        # 일반 모드: test set 최종 평가
         return self.evaluate(is_final=True)
 
     def _train_loop(self):

@@ -25,10 +25,12 @@ class Trainer:
         
         # 닫힌 해(fit) 모델인지 SGD(calc_loss) 모델인지 확인
         self.has_fit = hasattr(model, 'fit') and callable(getattr(model, 'fit'))
-        
+
         # train 설정 위치 유연하게 처리 (root 또는 model.train)
         self.train_cfg = config.get('train', config.get('model', {}).get('train', {}))
         self.is_sgd = bool(self.train_cfg) and hasattr(model, 'calc_loss')
+
+        self._best_val_metrics = None  # HPO 모드에서 중복 inference 방지용
 
     def run(self):
         """실행 흐름 통합 (fit -> sgd train -> final evaluate)"""
@@ -41,7 +43,10 @@ class Trainer:
             self._train_loop()
 
         # HPO 모드: validation 결과 반환 (test set 노출 금지)
+        # SGD 모델은 _train_loop에서 이미 best val metrics를 계산했으므로 재사용
         if self.hpo_mode:
+            if self._best_val_metrics is not None:
+                return self._best_val_metrics
             return self.evaluate(is_final=False)
 
         # 일반 모드: test set 최종 평가
@@ -89,6 +94,7 @@ class Trainer:
             if val_val > best_metric:
                 best_metric = val_val
                 best_state = copy.deepcopy(self.model.state_dict())
+                self._best_val_metrics = val_metrics  # HPO 반환용 캐싱
                 patience_counter = 0 # 카운터 초기화
             else:
                 patience_counter += 1

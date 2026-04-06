@@ -140,7 +140,7 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device, user_hi
     unique_users = sorted(list(user_gt.keys()))
     
     # metrics_list에서 _evaluate_full이 직접 계산하는 것들만 results에 포함
-    core_metrics = ['HitRate', 'Recall', 'Precision', 'NDCG', 'LongTailHitRate', 'LongTailNDCG', 'HeadHitRate', 'HeadNDCG']
+    core_metrics = ['HitRate', 'Recall', 'Precision', 'NDCG', 'LongTailHitRate', 'LongTailRecall', 'LongTailNDCG', 'HeadHitRate', 'HeadRecall', 'HeadNDCG']
     active_core_metrics = [m for m in metrics_list if m in core_metrics]
     
     results = {f'{m}@{k}': [] for k in top_k_list for m in active_core_metrics}
@@ -191,10 +191,12 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device, user_hi
                         tail_gt = [it for it in gt if it in tail_item_set]
                         if tail_gt:
                             if 'LongTailHitRate' in metrics_list: results[f'LongTailHitRate@{k}'].append(get_hit_rate(pk, tail_gt))
+                            if 'LongTailRecall' in metrics_list: results[f'LongTailRecall@{k}'].append(get_recall(pk, tail_gt))
                             if 'LongTailNDCG' in metrics_list: results[f'LongTailNDCG@{k}'].append(get_ndcg(pk, tail_gt))
                         head_gt = [it for it in gt if it not in tail_item_set]
                         if head_gt:
                             if 'HeadHitRate' in metrics_list: results[f'HeadHitRate@{k}'].append(get_hit_rate(pk, head_gt))
+                            if 'HeadRecall' in metrics_list: results[f'HeadRecall@{k}'].append(get_recall(pk, head_gt))
                             if 'HeadNDCG' in metrics_list: results[f'HeadNDCG@{k}'].append(get_ndcg(pk, head_gt))
                     
                     if 'PopRatio' in metrics_list and mean_pop is not None:

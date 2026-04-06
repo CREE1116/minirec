@@ -26,7 +26,6 @@ class IPSWiener(BaseModel):
         
         # Step 2: Implicit IPS via Symmetric Normalization
         d = np.diag(G)
-        # d = G.sum(axis=1)  # ← 수정: 대각 원소 대신 행 합 사용
         d_inv = 1.0 / (np.power(d, self.alpha) + self.eps)
         G_tilde = G * d_inv[:, np.newaxis] * d_inv[np.newaxis, :]
         

@@ -1,57 +1,48 @@
 import torch
 import torch.nn as nn
+import numpy as np
+import scipy.sparse as sp
+from implicit.als import AlternatingLeastSquares
 from .base import BaseModel
 
 class iALS(BaseModel):
     def __init__(self, config, data_loader):
         super().__init__(config, data_loader)
         self.embedding_dim = config['model'].get('embedding_dim', 128)
-        self.reg_lambda = config['model'].get('reg_lambda', 0.01)
-        self.alpha = config['model'].get('alpha', 40.0)
-        self.max_iter = config['model'].get('max_iter', 15)
+        self.reg_lambda    = config['model'].get('reg_lambda', 0.01)
+        self.alpha         = config['model'].get('alpha', 40.0)
+        self.max_iter      = config['model'].get('max_iter', 15)
 
         self.user_embedding = nn.Embedding(self.n_users, self.embedding_dim)
         self.item_embedding = nn.Embedding(self.n_items, self.embedding_dim)
-        nn.init.normal_(self.user_embedding.weight, std=0.01)
-        nn.init.normal_(self.item_embedding.weight, std=0.01)
 
     def fit(self, data_loader):
-        print(f"Fitting iALS (dim={self.embedding_dim}, alpha={self.alpha}) on {self.device}...")
-        X = self.get_train_matrix(data_loader)
-        Y = self.item_embedding.weight
-        U = self.user_embedding.weight
+        use_gpu = self.device.type == 'cuda'
+        print(f"Fitting iALS (dim={self.embedding_dim}, alpha={self.alpha}) via implicit (gpu={use_gpu})...")
 
-        for iteration in range(self.max_iter):
-            U = self._als_step(X, U, Y, is_user=True)
-            self.user_embedding.weight.data.copy_(U)
-            Y = self._als_step(X, Y, U, is_user=False)
-            self.item_embedding.weight.data.copy_(Y)
-            print(f"  Iteration {iteration+1}/{self.max_iter} complete.")
+        train_df = data_loader.train_df
+        rows = train_df['user_id'].values
+        cols = train_df['item_id'].values
+        vals = np.ones(len(rows), dtype=np.float32)
+
+        # implicit expects item×user CSR matrix
+        user_items = sp.csr_matrix((vals, (rows, cols)), shape=(self.n_users, self.n_items))
+        item_users = user_items.T.tocsr()
+
+        model = AlternatingLeastSquares(
+            factors=self.embedding_dim,
+            regularization=self.reg_lambda,
+            alpha=self.alpha,
+            iterations=self.max_iter,
+            use_gpu=use_gpu,
+        )
+        model.fit(item_users)
+
+        self.user_embedding.weight.data.copy_(
+            torch.from_numpy(model.user_factors).to(self.device))
+        self.item_embedding.weight.data.copy_(
+            torch.from_numpy(model.item_factors).to(self.device))
         print("iALS fitting complete.")
-
-    def _als_step(self, X, factors, fixed_factors, is_user=True):
-        reg_id = torch.eye(self.embedding_dim, device=self.device) * self.reg_lambda
-        FTF = fixed_factors.t() @ fixed_factors
-        new_factors = torch.zeros_like(factors)
-
-        indices = X.indices()
-        if not is_user:
-            indices = indices.flip(0)
-
-        owner_ids = indices[0]
-        other_ids = indices[1].to(self.device)
-
-        unique_owners, counts = torch.unique_consecutive(owner_ids, return_counts=True)
-        curr_idx = 0
-        for owner_id, count in zip(unique_owners, counts):
-            others = other_ids[curr_idx : curr_idx + count]
-            F_i = fixed_factors[others]
-            LHS = FTF + self.alpha * (F_i.t() @ F_i) + reg_id
-            RHS = (1 + self.alpha) * F_i.sum(dim=0)
-            new_factors[owner_id] = torch.linalg.solve(LHS, RHS)
-            curr_idx += count
-
-        return new_factors
 
     def forward(self, user_indices):
         return self.user_embedding(user_indices) @ self.item_embedding.weight.t()

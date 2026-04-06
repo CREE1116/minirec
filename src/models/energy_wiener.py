@@ -1,6 +1,5 @@
 import torch
-import numpy as np
-import scipy.sparse as sp
+import torch.nn as nn
 from .base import BaseModel
 
 class EnergyWiener(BaseModel):
@@ -18,22 +17,18 @@ class EnergyWiener(BaseModel):
         self.eps = 1e-12
         
         self.weight_matrix = None
-        self.train_matrix = sp.csr_matrix((self.n_users, self.n_items))
+        self.train_matrix = None
 
     def fit(self, data_loader):
-        print(f"Fitting EnergyWiener (GPU, alpha={self.alpha}, lambda={self.reg_lambda})...")
-        train_df = data_loader.train_df
-        rows, cols = train_df['user_id'].values, train_df['item_id'].values
-        X = sp.csr_matrix((np.ones(len(rows)), (rows, cols)), 
-                          shape=(self.n_users, self.n_items), dtype=np.float32)
-        self.train_matrix = X
+        print(f"Fitting EnergyWiener (alpha={self.alpha}, lambda={self.reg_lambda}) on {self.device}...")
+        self.train_matrix = self.get_train_matrix(data_loader)
+        X = self.train_matrix
         
-        # Step 1: Gram matrix calculation (CPU Sparse -> Dense GPU)
-        G_cpu = (X.T @ X).toarray()
-        G = torch.from_numpy(G_cpu).to(self.device)
+        # Step 1: Gram matrix calculation (Sparse -> Dense GPU)
+        G = torch.sparse.mm(X.t(), X.to_dense())
         
         # Step 2: Item Statistics on GPU
-        d = torch.diag(G)             # Degree (Popularity)
+        d = G.diagonal()             # Degree (Popularity)
         S = G.sum(dim=1)              # Row Sum (Contextual Volume)
         
         # Step 3: Compute Influence-based Normalization Factor
@@ -48,16 +43,18 @@ class EnergyWiener(BaseModel):
         
         # Step 5: Wiener Filter Solve on GPU
         # (G_tilde + lambda * I) W = G_tilde
-        A = G_tilde + self.reg_lambda * torch.eye(self.n_items, device=self.device)
+        A = G_tilde.clone()
+        A.diagonal().add_(self.reg_lambda)
         
         # torch.linalg.solve is significantly faster on GPU than NumPy on CPU
         self.weight_matrix = torch.linalg.solve(A, G_tilde)
         
-        print("EnergyWiener GPU fitting complete.")
+        print("EnergyWiener fitting complete.")
 
     def forward(self, user_indices):
-        u_ids = user_indices.cpu().numpy()
-        user_vec = torch.from_numpy(self.train_matrix[u_ids].toarray()).float().to(self.device)
+        if not hasattr(self, 'train_matrix_dense'):
+            self.train_matrix_dense = self.train_matrix.to_dense()
+        user_vec = self.train_matrix_dense[user_indices]
         return user_vec @ self.weight_matrix
 
     def calc_loss(self, batch_data):

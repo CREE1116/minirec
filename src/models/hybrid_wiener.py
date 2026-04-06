@@ -1,6 +1,5 @@
 import torch
-import numpy as np
-import scipy.sparse as sp
+import torch.nn as nn
 from .base import BaseModel
 
 class HybridWiener(BaseModel):
@@ -18,43 +17,39 @@ class HybridWiener(BaseModel):
         self.eps = 1e-12
         
         self.weight_matrix = None
-        self.train_matrix = sp.csr_matrix((self.n_users, self.n_items))
+        self.train_matrix = None
 
     def fit(self, data_loader):
-        print(f"Fitting HybridWiener (alpha={self.alpha}, gamma={self.gamma}, lambda={self.reg_lambda})...")
-        train_df = data_loader.train_df
-        rows, cols = train_df['user_id'].values, train_df['item_id'].values
-        X = sp.csr_matrix((np.ones(len(rows)), (rows, cols)), 
-                          shape=(self.n_users, self.n_items), dtype=np.float32)
-        self.train_matrix = X
+        print(f"Fitting HybridWiener (alpha={self.alpha}, gamma={self.gamma}, lambda={self.reg_lambda}) on {self.device}...")
+        self.train_matrix = self.get_train_matrix(data_loader)
+        X = self.train_matrix
         
         # Step 1: Gram matrix G
-        G = (X.T @ X).toarray()
+        G = torch.sparse.mm(X.t(), X.to_dense())
         
         # Step 2: Statistics
-        d = np.diag(G)                               # 1st order: Popularity
-        e = np.sqrt(np.sum(np.square(G), axis=1))    # 2nd order: Energy
+        d = G.diagonal()                               # 1st order: Popularity
+        e = torch.sqrt(torch.sum(torch.square(G), dim=1))    # 2nd order: Energy
         
         # Step 3: Hybrid Mixing
         # Use linear interpolation to balance spread and intensity
         s = (1.0 - self.gamma) * d + self.gamma * e
         
         # Step 4: Symmetric Normalization
-        s_inv = 1.0 / (np.power(s + self.eps, self.alpha))
-        G_tilde = G * s_inv[:, np.newaxis] * s_inv[np.newaxis, :]
+        s_inv = 1.0 / (torch.pow(s + self.eps, self.alpha))
+        G_tilde = G * s_inv.unsqueeze(1) * s_inv.unsqueeze(0)
         
         # Step 5: Solve (G_tilde + lambda * I) B = G_tilde
-        A = G_tilde.copy()
-        np.fill_diagonal(A, np.diag(A) + self.reg_lambda)
+        A = G_tilde.clone()
+        A.diagonal().add_(self.reg_lambda)
         
-        B = np.linalg.solve(A, G_tilde)
-        
-        self.weight_matrix = torch.from_numpy(B).float().to(self.device)
+        self.weight_matrix = torch.linalg.solve(A, G_tilde)
         print("HybridWiener fitting complete.")
 
     def forward(self, user_indices):
-        u_ids = user_indices.cpu().numpy()
-        user_vec = torch.from_numpy(self.train_matrix[u_ids].toarray()).float().to(self.device)
+        if not hasattr(self, 'train_matrix_dense'):
+            self.train_matrix_dense = self.train_matrix.to_dense()
+        user_vec = self.train_matrix_dense[user_indices]
         return user_vec @ self.weight_matrix
 
     def calc_loss(self, batch_data):

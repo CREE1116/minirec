@@ -9,6 +9,10 @@ from .lira import LIRA
 from .dlae import DLAE
 from .ipsdlae import IPSDLAE
 from .ipswiener import IPSWiener
+from .pop_ips_wiener import PopIPSWiener
+from .energy_wiener import EnergyWiener
+from .hybrid_wiener import HybridWiener
+from .energy_dlae import EnergyDLAE
 
 MODEL_REGISTRY = {
     'ease': EASE,
@@ -21,7 +25,11 @@ MODEL_REGISTRY = {
     'lira': LIRA,
     'dlae': DLAE,
     'ipsdlae': IPSDLAE,
-    'ipswiener': IPSWiener
+    'ipswiener': IPSWiener,
+    'pop_ips_wiener': PopIPSWiener,
+    'energy_wiener': EnergyWiener,
+    'hybrid_wiener': HybridWiener,
+    'energy_dlae': EnergyDLAE
 }
 
 def get_model(model_name, config, data_loader):

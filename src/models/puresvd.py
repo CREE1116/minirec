@@ -1,8 +1,7 @@
 import torch
 import numpy as np
-import scipy.sparse as sp
-from scipy.sparse.linalg import svds
 from .base import BaseModel
+from src.utils.svd import get_svd_cache
 
 class PureSVD(BaseModel):
     def __init__(self, config, data_loader):
@@ -13,19 +12,17 @@ class PureSVD(BaseModel):
         self.item_factors = None
 
     def fit(self, data_loader):
-        print(f"Fitting PureSVD (dim={self.embedding_dim})...")
-        train_df = data_loader.train_df
-        X = sp.csr_matrix((np.ones(len(train_df)), (train_df['user_id'], train_df['item_id'])), 
-                          shape=(self.n_users, self.n_items), dtype=np.float32)
+        # SVD 캐시 활용 (기본 1000차원까지 캐싱)
+        k_cache = self.config.get('svd_cache_k', 1000)
+        svd_data = get_svd_cache(data_loader, k_max=k_cache)
         
-        # SVD: X \approx U * S * V^T
-        # k는 min(dim, n_users-1, n_items-1)이어야 함
-        k = min(self.embedding_dim, min(X.shape) - 1)
-        u, s, vt = svds(X, k=k)
+        # 현재 요청된 k만큼 슬라이싱 (Truncate)
+        k = min(self.embedding_dim, len(svd_data['s']))
+        print(f"Fitting PureSVD by truncating cached SVD (requested k={self.embedding_dim}, actual k={k})...")
         
-        # Sort by singular values descending
-        idx = np.argsort(s)[::-1]
-        u, s, vt = u[:, idx], s[idx], vt[idx, :]
+        u = svd_data['u'][:, :k]
+        s = svd_data['s'][:k]
+        vt = svd_data['vt'][:k, :]
         
         # Store as torch tensors
         self.user_factors = torch.from_numpy(u * s).float().to(self.device) # U * S

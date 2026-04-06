@@ -2,7 +2,21 @@
 method: "full" # full, sampled, uni99
 top_k: [10, 20, 50]
 metrics:
-  ["Recall", "NDCG", "HitRate", "Precision", "Coverage", "Novelty", "GiniIndex"]
+  [
+    "Recall",
+    "NDCG",
+    "HitRate",
+    "Precision",
+    "LongTailRecall",
+    "LongTailNDCG",
+    "HeadRecall",
+    "HeadNDCG",
+    "Coverage",
+    "LongTailCoverage",
+    "Novelty",
+    "GiniIndex",
+    "PopRatio",
+  ]
 main_metric: "NDCG"
 main_metric_k: 20
 long_tail_percent: 0.8

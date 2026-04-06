@@ -66,16 +66,21 @@ class BayesianOptimizer:
             p_log = p_def.get('log', False)
 
             if p_type == 'float':
+                if p_range is None: raise ValueError(f"Parameter '{name}' of type 'float' requires 'range' definition.")
                 low, high = map(float, p_range.split())
                 val = trial.suggest_float(name, low, high, log=p_log)
             elif p_type == 'int':
+                if p_range is None: raise ValueError(f"Parameter '{name}' of type 'int' requires 'range' definition.")
                 low, high = map(int, p_range.split())
                 val = trial.suggest_int(name, low, high, log=p_log)
             elif p_type == 'int_for_k':
                 max_k = self.get_max_k()
                 val = trial.suggest_int(name, 1, max_k)
             elif p_type == 'categorical':
-                choices = p_range if isinstance(p_range, list) else p_range.split()
+                if p_range is None: raise ValueError(f"Parameter '{name}' of type 'categorical' requires 'range' definition.")
+                choices = p_range
+                if isinstance(choices, str):
+                    choices = choices.split()
                 val = trial.suggest_categorical(name, choices)
             
             current_params[name] = val

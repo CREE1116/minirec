@@ -1,0 +1,4 @@
+model:
+  name: energy_wiener
+  reg_lambda: 100.0
+  alpha: 0.5 # 2nd-order energy normalization strength

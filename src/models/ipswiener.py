@@ -16,7 +16,7 @@ class IPSWiener(BaseModel):
         X = self.get_train_matrix(data_loader)
         self.train_matrix = X
 
-        G = torch.sparse.mm(X.t(), X).to_dense().to(self.device)
+        G = torch.sparse.mm(X.t(), X.to_dense()).to(self.device)
 
         d = G.diagonal()
         d_inv = 1.0 / (torch.pow(d, self.alpha) + self.eps)

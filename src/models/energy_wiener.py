@@ -5,10 +5,11 @@ from .base import BaseModel
 
 class EnergyWiener(BaseModel):
     """
-    2nd-Order Statistic Wiener Filter.
-    Uses Row-Energy (L2 norm of Gram rows) for normalization instead of 1st-order popularity.
-    G_tilde = E^-alpha * G * E^-alpha
-    where E_ii = ||G_i||_2 (Frobenius/L2 norm of i-th row of G).
+    Degree-Ratio Symmetric Wiener Filter (GPU Accelerated).
+    Combines User-Activity Ratio with Symmetric Normalization.
+    Influence I = d^2 / S
+    G_tilde = I^(-alpha/2) * G * I^(-alpha/2)
+    W = (G_tilde + lambda * I)^-1 * G_tilde
     """
     def __init__(self, config, data_loader):
         super().__init__(config, data_loader)
@@ -20,31 +21,39 @@ class EnergyWiener(BaseModel):
         self.train_matrix = sp.csr_matrix((self.n_users, self.n_items))
 
     def fit(self, data_loader):
-        print(f"Fitting EnergyWiener (Row-Energy alpha={self.alpha}, lambda={self.reg_lambda})...")
+        print(f"Fitting EnergyWiener (GPU, alpha={self.alpha}, lambda={self.reg_lambda})...")
         train_df = data_loader.train_df
         rows, cols = train_df['user_id'].values, train_df['item_id'].values
         X = sp.csr_matrix((np.ones(len(rows)), (rows, cols)), 
                           shape=(self.n_users, self.n_items), dtype=np.float32)
         self.train_matrix = X
         
-        # Step 1: Gram matrix G = X.T @ X
-        G = (X.T @ X).toarray()
+        # Step 1: Gram matrix calculation (CPU Sparse -> Dense GPU)
+        G_cpu = (X.T @ X).toarray()
+        G = torch.from_numpy(G_cpu).to(self.device)
         
-        # Step 2: 2nd-Order Statistic - Row Energy (L2 Norm of each row in G)
-        row_energy = np.sqrt(np.sum(np.square(G), axis=1))
+        # Step 2: Item Statistics on GPU
+        d = torch.diag(G)             # Degree (Popularity)
+        S = G.sum(dim=1)              # Row Sum (Contextual Volume)
         
-        # Step 3: Energy-based Symmetric Normalization
-        e_inv = 1.0 / (np.power(row_energy + self.eps, self.alpha))
-        G_tilde = G * e_inv[:, np.newaxis] * e_inv[np.newaxis, :]
+        # Step 3: Compute Influence-based Normalization Factor
+        # Influence I = d^2 / S (Degree-Ratio Logic)
+        influence = (d**2) / (S + self.eps)
         
-        # Step 4: Solve (G_tilde + lambda * I) B = G_tilde
-        A = G_tilde.copy()
-        np.fill_diagonal(A, np.diag(A) + self.reg_lambda)
+        # Symmetric Norm scaling: influence^(-alpha / 2)
+        d_inv = torch.pow(influence + self.eps, -self.alpha / 2.0)
         
-        B = np.linalg.solve(A, G_tilde)
+        # Step 4: Symmetric Normalization G_tilde = D_inv @ G @ D_inv
+        G_tilde = G * d_inv.unsqueeze(1) * d_inv.unsqueeze(0)
         
-        self.weight_matrix = torch.from_numpy(B).float().to(self.device)
-        print("EnergyWiener fitting complete.")
+        # Step 5: Wiener Filter Solve on GPU
+        # (G_tilde + lambda * I) W = G_tilde
+        A = G_tilde + self.reg_lambda * torch.eye(self.n_items, device=self.device)
+        
+        # torch.linalg.solve is significantly faster on GPU than NumPy on CPU
+        self.weight_matrix = torch.linalg.solve(A, G_tilde)
+        
+        print("EnergyWiener GPU fitting complete.")
 
     def forward(self, user_indices):
         u_ids = user_indices.cpu().numpy()

@@ -8,7 +8,7 @@ from torch.utils.data import TensorDataset, DataLoader
 
 # Precomputed 1/log2(rank+2) and cumulative IDCG table (up to K=10000)
 _LOG2_RECIP  = (1.0 / np.log2(np.arange(2, 10002, dtype=np.float64))).astype(np.float32)
-_IDCG_TABLE  = np.concatenate([[0.0], np.cumsum(_LOG2_RECIP)])  # index by n_relevant (0..10000)
+_IDCG_TABLE  = np.concatenate([[np.float32(0.0)], np.cumsum(_LOG2_RECIP)])  # float32, index by n_relevant
 
 
 # ── Diversity / fairness helpers (called once, not in eval loop) ──────────────
@@ -93,8 +93,8 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
     n_items = model.n_items
 
     # Precompute log2 weights and IDCG lookup on device
-    log2_w    = torch.tensor(_LOG2_RECIP[:max_k], device=device)          # (max_k,)
-    idcg_lut  = torch.tensor(_IDCG_TABLE[:max_k + 1], device=device)     # (max_k+1,)
+    log2_w    = torch.tensor(_LOG2_RECIP[:max_k], dtype=torch.float32, device=device)
+    idcg_lut  = torch.tensor(_IDCG_TABLE[:max_k + 1], dtype=torch.float32, device=device)
 
     # Precompute tail mask
     tail_item_set = None

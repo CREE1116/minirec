@@ -1,57 +1,74 @@
 import torch
-import torch.nn as nn
 from .base import BaseModel
+
 
 class Aspire(BaseModel):
     """
-    ASPIRE with Diagonal-Zero Constraint
-    1. Spectral Purification via Reliability Index (d^2/S)
-    2. EASE-style Diagonal-Zero Constraint for exact top-K prediction
+    ASPIRE: Spectral Purification via Signal-to-Noise Ratio (d^2/S)
+    followed by EASE-style Diagonal-Zero Constraint.
+
+    SNR을 로그 공간에서 추정 (geometric mean 기준 정규화):
+        log(λ_i) = 2·log(n_i) - log(S_i)
+        λ_i_robust = exp(log(λ_i) - mean(log(λ_i)))
+                   = (n_i²/S_i) / GM(n_i²/S_i)
+
+    수식적으로는 n_i²/S_i를 geometric mean으로 나눈 것과 동치.
+    sparse item의 극단값이 log로 압축 → head/tail 균형 보정.
+
+    1. λ_i = exp(2·log(n_i) - log(S_i) - μ)  (log-space robust SNR)
+    2. G_tilde = Λ^{-α/2} G Λ^{-α/2}
+    3. W = EASE(G_tilde)
     """
+
     def __init__(self, config, data_loader):
         super().__init__(config, data_loader)
         self.reg_lambda = config['model'].get('reg_lambda', 100.0)
-        self.alpha = config['model'].get('alpha', 1.0)
-        self.eps = 1e-12
+        self.alpha      = config['model'].get('alpha', 1.0)
+        self.eps        = 1e-12
         self.weight_matrix = None
-        self.train_matrix = None
+        self.train_matrix  = None
 
     def fit(self, data_loader):
-        print(f"Fitting Pure ASPIRE+DiagZero (lambda={self.reg_lambda}, alpha={self.alpha}) on {self.device}...")
+        print(f"Fitting Aspire (lambda={self.reg_lambda}, alpha={self.alpha}) "
+              f"on {self.device}...")
         X = self.get_train_matrix(data_loader)
         self.train_matrix = X
 
-        # 1. 원본 Gram 행렬 계산
+        # ── 1. Gram matrix G = X^T X ──────────────────────────────────────
         G = torch.sparse.mm(X.t(), X.to_dense()).to(self.device)
-        d = G.diagonal()
-        S = G.sum(dim=1)
+        d = G.diagonal()       # n_i: 아이템 자기 에너지 (≈ popularity)
+        S = G.sum(dim=1)       # S_i: 그램 행합 (공출현 에너지)
 
-        # 2. 신뢰도 기반 대칭 정규화 (Spectral Purification)
-        reliability = (d * d) / (S + self.eps)
-        norm_reliability = reliability / (reliability.mean() + self.eps)
-        
-        scale_factor = torch.pow(norm_reliability + self.eps, -self.alpha / 2.0)
+        # ── 2. Log-space robust SNR ────────────────────────────────────────
+        # log(λ_i) = 2·log(n_i) - log(S_i)
+        log_lambda = 2.0 * torch.log(d + self.eps) - torch.log(S + self.eps)
+
+        # geometric mean 기준 중심화
+        # → exp(log_lambda - mean) = (n_i²/S_i) / GM(n_i²/S_i)
+        log_lambda_centered = log_lambda - log_lambda.mean()
+        reliability = log_lambda_centered.exp()
+
+        # ── 3. G_tilde = Λ^{-α/2} G Λ^{-α/2} ────────────────────────────
+        scale_factor = torch.pow(reliability + self.eps, -self.alpha / 2.0)
         G_tilde = G * scale_factor.unsqueeze(1) * scale_factor.unsqueeze(0)
 
-        # 3. 정규 방정식 세팅
+        # ── 4. EASE: (G_tilde + λI)^{-1} ─────────────────────────────────
         A = G_tilde.clone()
         A.diagonal().add_(self.reg_lambda)
 
-        # 4. Diagonal-Zero Constraint 해법 (Inverse 활용)
         try:
             P = torch.linalg.inv(A)
-        except torch._C._LinAlgError:
-            # 수치적 극단값 대비 안전장치
-            print("Warning: Singular matrix, applying safe fallback regularization.")
-            A.diagonal().add_(1.0)
+        except (torch._C._LinAlgError, RuntimeError):
+            print("[Warning] Singular matrix, stronger regularization applied.")
+            A.diagonal().add_(self.reg_lambda * 10 + 1e-4)
             P = torch.linalg.inv(A)
 
-        # W = I - P * diag(P)^-1 (대각 성분 0으로 강제)
+        # ── 5. W = I - P / diag(P)  (diag(W) = 0) ────────────────────────
         diag_P = P.diagonal()
-        self.weight_matrix = P / -diag_P.unsqueeze(0)
-        self.weight_matrix.diagonal().fill_(0)
-        
-        print("Pure ASPIRE fitting complete.")
+        self.weight_matrix = P / (-diag_P + self.eps)
+        self.weight_matrix.diagonal().zero_()
+
+        print("Aspire fitting complete.")
 
     def forward(self, user_indices):
         if not hasattr(self, 'train_matrix_dense'):

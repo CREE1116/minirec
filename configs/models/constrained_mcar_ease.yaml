@@ -1,5 +1,0 @@
-model:
-  model_name: "constrained_mcar_ease"
-  reg_lambda: 200.0
-  gamma: 0.5
-  device: "auto"

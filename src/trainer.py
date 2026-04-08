@@ -56,7 +56,18 @@ class Trainer:
         train_cfg = self.train_cfg
         lr = float(train_cfg.get('lr', 0.001))
         wd = float(train_cfg.get('weight_decay', 0))
-        optimizer = optim.Adam(self.model.parameters(), lr=lr, weight_decay=wd)
+        
+        # Optimizer 설정 (Adam, SGD, AdamW 지원)
+        opt_name = train_cfg.get('optimizer', 'Adam').lower()
+        if opt_name == 'adam':
+            optimizer = optim.Adam(self.model.parameters(), lr=lr, weight_decay=wd)
+        elif opt_name == 'sgd':
+            optimizer = optim.SGD(self.model.parameters(), lr=lr, weight_decay=wd, momentum=train_cfg.get('momentum', 0.9))
+        elif opt_name == 'adamw':
+            optimizer = optim.AdamW(self.model.parameters(), lr=lr, weight_decay=wd)
+        else:
+            print(f"Unknown optimizer '{opt_name}', defaulting to Adam.")
+            optimizer = optim.Adam(self.model.parameters(), lr=lr, weight_decay=wd)
         
         epochs = train_cfg.get('epochs', 100) # 기본 에폭 상향
         batch_size = train_cfg.get('batch_size', 1024)

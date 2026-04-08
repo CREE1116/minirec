@@ -7,13 +7,14 @@ from .lightgcn import LightGCN
 from .ips_lae import IPS_LAE
 from .lira import LIRA
 from .dlae import DLAE
-from .ipswiener import IPSWiener
 from .aspire import Aspire
+from .daspire import DAspire
+from .aspire_diag import AspireDiag
+from .aspire_rowsum import AspireRowsum
+from .daspire_diag import DAspireDiag
+from .daspire_rowsum import DAspireRowsum
 from .bspm import BSPM
 from .turbocf import TurboCF
-from .lr_chebyshev_cf import LR_Chebyshev_CF
-from .mnar_lae import MNAR_LAE
-from .constrained_mcar_ease import ConstrainedMCAREASE
 from .alpha_ease import AlphaEASE
 
 MODEL_REGISTRY = {
@@ -26,13 +27,14 @@ MODEL_REGISTRY = {
     'ips_lae': IPS_LAE,
     'lira': LIRA,
     'dlae': DLAE,
-    'ipswiener': IPSWiener,
     'aspire': Aspire,
+    'daspire': DAspire,
+    'aspire_diag': AspireDiag,
+    'aspire_rowsum': AspireRowsum,
+    'daspire_diag': DAspireDiag,
+    'daspire_rowsum': DAspireRowsum,
     'bspm': BSPM,
     'turbocf': TurboCF,
-    'lr_chebyshev_cf': LR_Chebyshev_CF,
-    'mnar_lae': MNAR_LAE,
-    'constrained_mcar_ease': ConstrainedMCAREASE,
     'alpha_ease': AlphaEASE
 }
 
@@ -45,10 +47,10 @@ def get_model(model_name, config, data_loader):
             norm_name = 'puresvd'
         elif norm_name == 'puresvd' and 'pure_svd' in MODEL_REGISTRY:
             norm_name = 'pure_svd'
-        
+
         if norm_name not in MODEL_REGISTRY:
             raise ValueError(f"Unknown model: {model_name} (normalized: {norm_name}). Available models: {list(MODEL_REGISTRY.keys())}")
-            
+
     return MODEL_REGISTRY[norm_name](config, data_loader)
 
 def register_model(name, model_class):

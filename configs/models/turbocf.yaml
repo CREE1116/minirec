@@ -1,7 +1,7 @@
-# TurboCF Model Configuration
-model_name: "turbocf"
-
 model:
-  reg_lambda: 100.0  # Ridge regularization (used for Chebyshev approximation)
-  K: 3               # Polynomial degree
-  alpha: 0.5         # Symmetric normalization strength
+  # Turbo-CF: Matrix Decomposition-Free Graph Filtering
+  # SIGIR 2024 - Park et al.
+  model_name: 'turbocf'
+  alpha: 0.5          # Asymmetric normalization 강도 (0: item-side, 1: user-side)
+  filter_type: 3      # LPF 유형 (1: linear, 2: quadratic, 3: smooth-step)
+  device: 'auto'

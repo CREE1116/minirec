@@ -1,127 +1,110 @@
 import torch
 import numpy as np
+import scipy.sparse as sp
 from .base import BaseModel
 
 
 class TurboCF(BaseModel):
     """
-    TurboCF: Matrix Decomposition-Free Graph Filtering
-    (Park et al., SIGIR 2024)
+    Turbo-CF: Matrix Decomposition-Free Graph Filtering for Fast Recommendation
+    SIGIR 2024 - Park et al.
 
-    핵심 아이디어:
-        행렬 분해나 명시적인 가중치 행렬(W) 생성 없이, 
-        Sparse한 Gram 행렬 위에서 다항식 필터를 직접 적용하여 추천 신호를 추출합니다.
-        
-    수정 사항:
-        - 모든 연산을 Sparse 상태로 유지하여 메모리 효율 극대화
-        - Explicit W 행렬을 만들지 않고 Forward 시점에 Polynomial Filtering 수행
-        - EASE 필터 함수(mu / (mu + lambda))를 Chebyshev 다항식으로 근사
+    논문 핵심 알고리즘:
+      1) Asymmetric normalization
+             R̄ = D_U^{-α} R D_I^{-(1-α)}
+      2) Item-item similarity graph (symmetric PSD)
+             P̄ = R̄ᵀ R̄
+      3) Row-normalize P̄ → P̂  (row-stochastic, eigenvalues ∈ [0, 1])
+      4) Polynomial LPF H(P̂)  — matrix-decomposition 없이 polynomial로 근사
+             LPF-1: H = P̂                       (linear)
+             LPF-2: H = 2P̂ − P̂²               (2차 근사)
+             LPF-3: H = 3P̂² − 2P̂³             (3차 smooth-step 근사, 논문 권장)
+      5) 예측: Ŝ = R̄ @ H
+
+    [기존 코드 vs 논문]
+      - 기존: raw Gram + Tikhonov(λI) + geometric series (βᵏGᵏ)
+        → 정규화 없음, 잘못된 필터 공식
+      - 수정: asymmetric normalization → row-stochastic P̂ → polynomial H
+        → 논문 Fig. 3 세 가지 LPF variant 구현
+
+    하이퍼파라미터:
+      alpha       : asymmetric normalization 강도 (default: 0.5)
+                    0 → item-side only, 1 → user-side only
+      filter_type : 1 / 2 / 3  (default: 3, 논문 권장)
     """
 
     def __init__(self, config, data_loader):
         super().__init__(config, data_loader)
-        self.reg_lambda = config['model'].get('reg_lambda', 100.0)
-        self.K          = config['model'].get('K', 3)        # Polynomial degree
-        self.alpha      = config['model'].get('alpha', 0.5)  # Normalization exponent
-        self.eps        = 1e-12
-        
-        # 가중치 행렬 대신 필터 계수와 정규화된 Gram 행렬(Sparse)을 저장
-        self.coeffs = None
-        self.G_tilde = None
-        self.train_matrix = None
+        self.alpha       = config['model'].get('alpha',       0.5)
+        self.filter_type = config['model'].get('filter_type',   3)
 
+    # ------------------------------------------------------------------
     def fit(self, data_loader):
-        print(f"Fitting TurboCF (lambda={self.reg_lambda}, K={self.K}, "
-              f"alpha={self.alpha}) on {self.device}...")
-        
-        # X: (Users x Items) Sparse Tensor
-        X = self.get_train_matrix(data_loader)
-        self.train_matrix = X # Sparse 유지
+        print(f"Fitting TurboCF  alpha={self.alpha}  filter_type={self.filter_type}")
 
-        # ── 1. Sparse Gram matrix G = X^T X ────────────────────────────────
-        # Dense 변환 없이 순수 Sparse 연산 수행
-        G = torch.sparse.mm(X.t(), X).coalesce()
-        n_i = torch.sparse.sum(G, dim=1).to_dense() # 각 아이템의 차수
+        train_df         = data_loader.train_df
+        n_users, n_items = data_loader.n_users, data_loader.n_items
 
-        # ── 2. Sparse Symmetric Normalization ─────────────────────────────
-        # G_tilde = D^{-alpha/2} G D^{-alpha/2}
-        inv_sqrt = torch.pow(n_i + self.eps, -self.alpha / 2.0)
-        
-        indices = G.indices()
-        rows, cols = indices[0], indices[1]
-        vals = G.values()
-        
-        # Sparse 원소별로 정규화 적용
-        vals_norm = vals * inv_sqrt[rows] * inv_sqrt[cols]
-        G_tilde = torch.sparse_coo_tensor(indices, vals_norm, G.shape).coalesce().to(self.device)
-        self.G_tilde = G_tilde
+        # ── Raw interaction matrix (sparse) ──────────────────────────
+        R_sp = sp.csr_matrix(
+            (np.ones(len(train_df)),
+             (train_df['user_id'], train_df['item_id'])),
+            shape=(n_users, n_items),
+            dtype=np.float32,
+        )
 
-        # ── 3. Polynomial Filter via Chebyshev Approximation ───────────────
-        # 고유값 범위 추정 (Sparse mv 사용)
-        mu_max = self._estimate_max_eigenvalue(G_tilde)
+        # ── Asymmetric normalization: R̄ = D_U^{-α} R D_I^{-(1-α)} ──
+        #    α=0.5이면 symmetric normalization (GF-CF와 동일)
+        #    α ≠ 0.5이면 asymmetric (TurboCF 논문 구분점)
+        rowsum = np.array(R_sp.sum(axis=1)).flatten() + 1e-12
+        colsum = np.array(R_sp.sum(axis=0)).flatten() + 1e-12
+        d_u    = np.power(rowsum, -self.alpha)           # (U,)
+        d_i    = np.power(colsum, -(1.0 - self.alpha))   # (I,)
+        R_bar_sp = sp.diags(d_u) @ R_sp @ sp.diags(d_i) # (U, I)
 
-        # EASE 필터 c_k 계수 산출
-        self.coeffs = self._ease_chebyshev_coeffs(
-            K=self.K,
-            lam=self.reg_lambda,
-            mu_max=mu_max
-        ).to(self.device)
+        # Dense로 변환 후 GPU 이동
+        R_bar = torch.from_numpy(R_bar_sp.toarray()).float().to(self.device)  # (U, I)
 
-        print(f"TurboCF fitting complete. mu_max: {mu_max:.4f}")
+        # ── Item-item similarity: P̄ = R̄ᵀ R̄  (symmetric PSD) ─────────
+        P_bar = R_bar.t() @ R_bar                        # (I, I)
 
+        # ── Row-normalize P̄ → P̂  (row-stochastic, eigenvalues ∈ [0,1])
+        D_P   = P_bar.sum(dim=1, keepdim=True).clamp(min=1e-12)
+        P_hat = P_bar / D_P                              # (I, I)
+
+        # ── Polynomial LPF: H(P̂) ─────────────────────────────────────
+        #
+        #  모든 filter는 h(0)=0, h(1)=1 조건을 만족
+        #  (eigenvalue=1 → 저주파 통과, eigenvalue=0 → 고주파 차단)
+        #
+        #  LPF-1: h(λ) = λ
+        #  LPF-2: h(λ) = 2λ − λ²      (quadratic, h'(1)=0)
+        #  LPF-3: h(λ) = 3λ² − 2λ³    (smooth-step, h'(0)=h'(1)=0)
+        #          → 이상적 LPF(step function)에 가장 근접한 3차 다항식
+        #
+        if self.filter_type == 1:
+            # LPF-1 (linear)
+            H = P_hat
+
+        elif self.filter_type == 2:
+            # LPF-2 (second-order): H = 2P̂ − P̂²
+            P2 = P_hat @ P_hat
+            H  = 2.0 * P_hat - P2
+
+        else:
+            # LPF-3 (third-order smooth-step, 논문 권장): H = 3P̂² − 2P̂³
+            P2 = P_hat @ P_hat
+            P3 = P2   @ P_hat
+            H  = 3.0 * P2 - 2.0 * P3
+
+        self.H     = H      # (I, I) polynomial filter matrix
+        self.R_bar = R_bar  # (U, I) normalized rating matrix (forward용)
+
+    # ------------------------------------------------------------------
     def forward(self, user_indices):
-        # ── 4. Explicit W 없이 Polynomial Filtering 수행 ──────────────────
-        # W = Σ c_k G_tilde^k
-        # y_hat = X @ W = Σ c_k (X @ G_tilde^k)
-        
-        # 속도를 위해 학습 행렬을 dense로 캐싱 (EASE와 동일)
-        if not hasattr(self, 'train_matrix_dense'):
-            self.train_matrix_dense = self.train_matrix.to_dense().to(self.device)
-            
-        # Z: (Batch x Items) Dense Tensor
-        Z = self.train_matrix_dense[user_indices]
-        out = self.coeffs[0] * Z
-        
-        # G_tilde (Sparse)와 Z (Dense)의 곱셈 수행
-        # Z @ G_tilde = (G_tilde @ Z.T).T  (Dense-Sparse MM은 이 방식이 가장 효율적)
-        for k in range(1, self.K + 1):
-            # Z_next = Z @ G_tilde
-            Z = torch.sparse.mm(self.G_tilde, Z.t()).t()
-            out = out + self.coeffs[k] * Z
-            
-        return out
-
-    def _estimate_max_eigenvalue(self, G, n_iter=20):
-        """Power iteration using sparse matrix-matrix multiplication."""
-        v = torch.randn(G.shape[0], device=self.device)
-        v = v / v.norm()
-        mu = 1.0
-        for _ in range(n_iter):
-            # torch.sparse.mv 대신 mm 사용 (vector를 N x 1 matrix로 취급)
-            v = torch.sparse.mm(G, v.unsqueeze(1)).squeeze()
-            mu = v.norm()
-            v = v / (mu + self.eps)
-        return float(mu)
-
-    def _ease_chebyshev_coeffs(self, K, lam, mu_max):
-        """Compute Chebyshev coefficients for the EASE filter function."""
-        import numpy as np
-        n_points = max(100, K * 10)
-        idx = np.arange(1, n_points + 1)
-        theta = np.pi * (2 * idx - 1) / (2 * n_points)
-        mu_tilde = np.cos(theta)
-        mu = (mu_tilde + 1) / 2 * mu_max
-        f_vals = mu / (mu + lam)
-
-        coeffs = []
-        for k in range(K + 1):
-            T_k = np.cos(k * theta)
-            c_k = (2.0 / n_points) * np.sum(f_vals * T_k)
-            if k == 0:
-                c_k /= 2.0
-            coeffs.append(float(c_k))
-
-        return torch.tensor(coeffs, dtype=torch.float32)
+        # Ŝ_u = r̄_u @ H  (논문: 정규화된 graph signal에 polynomial filter 적용)
+        return self.R_bar[user_indices] @ self.H
 
     def calc_loss(self, batch_data):
+        # Training-free 방법이므로 loss = 0
         return (torch.tensor(0.0, device=self.device),), None

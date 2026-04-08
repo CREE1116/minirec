@@ -2,7 +2,7 @@ import torch
 from .base import BaseModel
 
 
-class Aspire(BaseModel):
+class DAspire(BaseModel):
     """
     ASPIRE: Spectral Purification via Signal-to-Noise Ratio (d^2/S)
     implemented with standard Ridge Regression (Diagonal enabled).
@@ -21,12 +21,13 @@ class Aspire(BaseModel):
         super().__init__(config, data_loader)
         self.reg_lambda = config['model'].get('reg_lambda', 100.0)
         self.alpha      = config['model'].get('alpha', 1.0)
+        self.dropout_p  = config['model'].get('dropout_p', 0.5)
         self.eps        = 1e-12
         self.weight_matrix = None
         self.train_matrix  = None
 
     def fit(self, data_loader):
-        print(f"Fitting Aspire (ridge with diagonal enabled), lambda={self.reg_lambda}, alpha={self.alpha}) "
+        print(f"Fitting DAspire (DLAE-style), lambda={self.reg_lambda}, alpha={self.alpha}, p={self.dropout_p}) "
               f"on {self.device}...")
         X = self.get_train_matrix(data_loader)
         self.train_matrix = X
@@ -43,21 +44,20 @@ class Aspire(BaseModel):
 
         # ── 3. G_tilde = Λ^{-α/2} G Λ^{-α/2} ────────────────────────────
         scale_factor = torch.pow(reliability + self.eps, -self.alpha / 2.0)
-        # scale_factor = torch.pow(d, -self.alpha / 2.0)
         G_tilde = G * scale_factor.unsqueeze(1) * scale_factor.unsqueeze(0)
 
-        # ── 4. Standard Ridge Regression (Diagonal enabled) ──────────────
-        A = G_tilde.clone()
-        A.diagonal().add_(self.reg_lambda)
+        # ── 4. DLAE-style Diagonal Scaling ──────────────────────────────
+        p = min(self.dropout_p, 0.99)
+        # w_i = (p / (1-p)) * G_ii
+        # scaled diagonal penalty
+        w = (p / (1.0 - p)) * G.diagonal()
 
+        G_lhs = G_tilde.clone()
+        G_lhs.diagonal().add_(w + self.reg_lambda)
 
-        # W = (G_tilde + λI)^{-1} G_tilde
-        # linalg.solve가 inv보다 수치적으로 더 안정적입니다.
-        P = torch.linalg.inv(A)
-        B = P / (-P.diagonal())
-        B.diagonal().zero_()
-        self.weight_matrix = B
-        print("Aspire fitting complete.")
+        # W = (G_tilde + diag(w + lambda))^{-1} G_tilde
+        self.weight_matrix = torch.linalg.solve(G_lhs, G_tilde)
+        print("DAspire fitting complete.")
 
     def forward(self, user_indices):
         if not hasattr(self, 'train_matrix_dense'):

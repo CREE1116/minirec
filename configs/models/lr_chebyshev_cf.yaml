@@ -1,7 +1,0 @@
-# LR_Chebyshev_CF Model Configuration
-model_name: "lr_chebyshev_cf"
-
-model:
-  reg_lambda: 100.0  # EASE regularization for final weight
-  K: 5               # Chebyshev polynomial degree
-  tau: 0.5           # Loop removal strength

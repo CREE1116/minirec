@@ -1,6 +1,7 @@
 model:
-  # GF-CF (Graph Filter based Collaborative Filtering)
-  model_name: "GF_CF"
-  alpha: 0.1
-  k: 5
-  device: "auto"
+  # GF-CF (Graph Filtering Collaborative Filtering)
+  # CIKM 2021 - Shen et al.
+  model_name: 'gf_cf'
+  k: 256              # SVD 차원 (Ideal LPF)
+  alpha: 0.3          # Global term (Ideal LPF) 가중치
+  device: 'auto'

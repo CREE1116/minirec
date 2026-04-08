@@ -2,15 +2,16 @@ model:
   # Matrix Factorization (BPR-MF)
   model_name: "MF"
   embedding_dim: 64
+  reg_weight: 1e-4
   device: "auto"
 
   train:
-    epochs: 100
+    optimizer: "Adam"
+    epochs: 500
     batch_size: 1024
     lr: 0.001
-    weight_decay: 0.0001
-    patience: 10 # 10 에폭 동안 개선 없으면 중단
+    weight_decay: 0
+    patience: 20
     loss_type: "pairwise"
-    # BPR loss
     num_negatives: 1
     negative_sampling_strategy: "uniform"

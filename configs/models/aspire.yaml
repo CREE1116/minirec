@@ -1,4 +1,4 @@
 model:
-  name: aspire
+  model_name: "aspire"
   reg_lambda: 100.0
   alpha: 1.0 # 2nd-order energy normalization strength

@@ -1,0 +1,7 @@
+# BSPM Model Configuration
+model_name: "bspm"
+
+model:
+  reg_lambda: 100.0  # Ridge regularization for final weight
+  t: 1.0             # Blurring strength (Heat diffusion)
+  s: 0.5             # Sharpening strength (Unsharp masking)

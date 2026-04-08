@@ -1,7 +1,0 @@
-model:
-  model_name: "IPSDLAE"
-  reg_lambda: 100.0
-  dropout_p: 0.5
-  alpha: 0.5
-  propensity_gamma: 0.5
-  device: "auto"

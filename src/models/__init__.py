@@ -7,10 +7,14 @@ from .lightgcn import LightGCN
 from .ips_lae import IPS_LAE
 from .lira import LIRA
 from .dlae import DLAE
-from .ipsdlae import IPSDLAE
 from .ipswiener import IPSWiener
-from .pop_ips_wiener import PopIPSWiener
 from .aspire import Aspire
+from .bspm import BSPM
+from .turbocf import TurboCF
+from .lr_chebyshev_cf import LR_Chebyshev_CF
+from .mnar_lae import MNAR_LAE
+from .constrained_mcar_ease import ConstrainedMCAREASE
+from .alpha_ease import AlphaEASE
 
 MODEL_REGISTRY = {
     'ease': EASE,
@@ -22,10 +26,14 @@ MODEL_REGISTRY = {
     'ips_lae': IPS_LAE,
     'lira': LIRA,
     'dlae': DLAE,
-    'ipsdlae': IPSDLAE,
     'ipswiener': IPSWiener,
-    'pop_ips_wiener': PopIPSWiener,
-    'aspire': Aspire
+    'aspire': Aspire,
+    'bspm': BSPM,
+    'turbocf': TurboCF,
+    'lr_chebyshev_cf': LR_Chebyshev_CF,
+    'mnar_lae': MNAR_LAE,
+    'constrained_mcar_ease': ConstrainedMCAREASE,
+    'alpha_ease': AlphaEASE
 }
 
 def get_model(model_name, config, data_loader):

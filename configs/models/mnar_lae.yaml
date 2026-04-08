@@ -1,0 +1,9 @@
+model:
+  model_name: "mnar_lae"
+  reg_lambda: 100.0 # lambda_0
+  gamma: 0.5 # Initial propensity exponent
+  beta: 0.5 # Adaptive regularization exponent
+  alpha: 0.5 # Propensity update smoothing
+  max_iter: 10 # Max self-consistent iterations
+  tol: 0.0001 # Convergence tolerance
+  device: "auto"

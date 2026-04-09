@@ -1,5 +1,4 @@
 import torch
-import numpy as nn
 import numpy as np
 from .base import BaseModel
 from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
@@ -7,7 +6,7 @@ from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
 class Aspire(BaseModel):
     """
     ASPIRE: Spectral Purification via Signal-to-Noise Ratio (d^2/S)
-    optimized with Scipy Gram matrix calculation.
+    Optimized with Hybrid CPU/GPU calculation.
     """
 
     def __init__(self, config, data_loader):
@@ -24,32 +23,32 @@ class Aspire(BaseModel):
         X = get_train_matrix_scipy(data_loader)
         self.train_matrix_scipy = X
 
-        # ── 1. Gram matrix G = X^T X ──────────────────────────────────────
-        print("  computing gram matrix...")
-        G = compute_gram_matrix(X)
-        d = G.diagonal()       # n_i: 아이템 자기 에너지
-        S = G.sum(axis=1)      # S_i: 그램 행합
+        # ── 1. Gram matrix G = X^T X (CPU) ──────────────────────────────────
+        print("  computing gram matrix (CPU)...")
+        G_np = compute_gram_matrix(X)
+        
+        # ── 2. Move to GPU for fast SNR and Scaling ──────────────────────────
+        G = torch.tensor(G_np, dtype=torch.float32, device=self.device)
+        d = G.diagonal()       # n_i
+        S = G.sum(dim=1)       # S_i
 
-        # ── 2. Log-space robust SNR ────────────────────────────────────────
-        log_lambda = 2.0 * np.log(d + self.eps) - np.log(S + self.eps)
+        log_lambda = 2.0 * torch.log(d + self.eps) - torch.log(S + self.eps)
         log_lambda_centered = log_lambda - log_lambda.mean()
-        reliability = np.exp(log_lambda_centered)
+        reliability = torch.exp(log_lambda_centered)
 
-        # ── 3. G_tilde = Λ^{-α/2} G Λ^{-α/2} ────────────────────────────
-        scale_factor = np.power(reliability + self.eps, -self.alpha / 2.0)
-        G_tilde = G * scale_factor[:, None] * scale_factor[None, :]
+        scale_factor = torch.pow(reliability + self.eps, -self.alpha / 2.0)
+        G_tilde = G * scale_factor.view(-1, 1) * scale_factor.view(1, -1)
 
-        # ── 4. Standard Ridge Regression (EASE style) ──────────────
-        print("  solving/inverting matrix...")
-        A = G_tilde.copy()
-        A[np.diag_indices(self.n_items)] += self.reg_lambda
+        # ── 3. Ridge Regression (GPU Inversion) ─────────────────────────────
+        print(f"  inverting matrix on {self.device}...")
+        A = G_tilde.clone()
+        A.diagonal().add_(self.reg_lambda)
         
-        # P = (G_tilde + λI)^{-1}
-        P = np.linalg.inv(A)
-        B = P / (-np.diag(P))
-        np.fill_diagonal(B, 0)
+        P = torch.linalg.inv(A)
+        B = P / (-P.diagonal().view(-1, 1) + self.eps)
+        B.diagonal().zero_()
         
-        self.weight_matrix = torch.tensor(B, dtype=torch.float32, device=self.device)
+        self.weight_matrix = B
         print("Aspire fitting complete.")
 
     def forward(self, user_indices):

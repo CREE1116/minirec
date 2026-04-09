@@ -6,7 +6,7 @@ from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
 class DAspire(BaseModel):
     """
     DAspire: Spectral Purification via SNR with DLAE-style regularization.
-    Optimized with Scipy.
+    Optimized with Hybrid CPU/GPU calculation.
     """
 
     def __init__(self, config, data_loader):
@@ -24,33 +24,31 @@ class DAspire(BaseModel):
         X = get_train_matrix_scipy(data_loader)
         self.train_matrix_scipy = X
 
-        # ── 1. Gram matrix G = X^T X ──────────────────────────────────────
-        print("  computing gram matrix...")
-        G = compute_gram_matrix(X)
-        d = G.diagonal()       # n_i
-        S = G.sum(axis=1)      # S_i
+        # ── 1. Gram matrix G = X^T X (CPU) ──────────────────────────────────
+        print("  computing gram matrix (CPU)...")
+        G_np = compute_gram_matrix(X)
+        
+        # ── 2. Move to GPU for fast SNR and Scaling ──────────────────────────
+        G = torch.tensor(G_np, dtype=torch.float32, device=self.device)
+        d = G.diagonal()
+        S = G.sum(axis=1)
 
-        # ── 2. Log-space robust SNR ────────────────────────────────────────
-        log_lambda = 2.0 * np.log(d + self.eps) - np.log(S + self.eps)
+        log_lambda = 2.0 * torch.log(d + self.eps) - torch.log(S + self.eps)
         log_lambda_centered = log_lambda - log_lambda.mean()
-        reliability = np.exp(log_lambda_centered)
+        reliability = torch.exp(log_lambda_centered)
 
-        # ── 3. G_tilde = Λ^{-α/2} G Λ^{-α/2} ────────────────────────────
-        scale_factor = np.power(reliability + self.eps, -self.alpha / 2.0)
-        G_tilde = G * scale_factor[:, None] * scale_factor[None, :]
+        scale_factor = torch.pow(reliability + self.eps, -self.alpha / 2.0)
+        G_tilde = G * scale_factor.view(-1, 1) * scale_factor.view(1, -1)
 
-        # ── 4. DLAE-style Diagonal Scaling ──────────────────────────────
+        # ── 3. DLAE-style Diagonal Scaling ──────────────────────────────
         p = min(self.dropout_p, 0.99)
-        w = (p / (1.0 - p)) * d # Original G diagonal used for dropout penalty
+        w = (p / (1.0 - p)) * d
 
-        G_lhs = G_tilde.copy()
-        G_lhs[np.diag_indices(self.n_items)] += (w + self.reg_lambda)
+        G_lhs = G_tilde.clone()
+        G_lhs.diagonal().add_(w + self.reg_lambda)
 
-        print("  solving linear system...")
-        self.weight_matrix = torch.linalg.solve(
-            torch.tensor(G_lhs, dtype=torch.float32, device=self.device),
-            torch.tensor(G_tilde, dtype=torch.float32, device=self.device)
-        )
+        print(f"  solving linear system on {self.device}...")
+        self.weight_matrix = torch.linalg.solve(G_lhs, G_tilde)
         print("DAspire fitting complete.")
 
     def forward(self, user_indices):

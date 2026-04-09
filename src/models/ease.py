@@ -14,7 +14,7 @@ class EASE(BaseModel):
     def fit(self, data_loader):
         print(f"Fitting EASE (lambda={self.reg_lambda}) on {self.device}...")
         
-        # Use Scipy for efficient sparse matrix multiplication
+        # 1. Gram Matrix calculation on CPU (Sparse)
         train_df = data_loader.train_df
         row = train_df['user_id'].values
         col = train_df['item_id'].values
@@ -22,23 +22,24 @@ class EASE(BaseModel):
         X = sparse.csr_matrix((data, (row, col)), shape=(self.n_users, self.n_items))
         self.train_matrix_scipy = X
 
-        # G = X.T @ X
-        print("  computing gram matrix...")
+        print("  computing gram matrix (CPU)...")
         G = X.T.dot(X).toarray()
-        G[np.diag_indices(self.n_items)] += self.reg_lambda
         
-        print("  inverting matrix...")
-        P = np.linalg.inv(G)
+        # 2. Move to GPU for fast inversion
+        print(f"  inverting matrix on {self.device}...")
+        G = torch.tensor(G, dtype=torch.float32, device=self.device)
+        G.diagonal().add_(self.reg_lambda)
         
-        # B = P / (-diag(P))
-        B = P / (-np.diag(P))
-        np.fill_diagonal(B, 0)
+        P = torch.linalg.inv(G)
         
-        self.weight_matrix = torch.tensor(B, dtype=torch.float32, device=self.device)
+        # 3. Final weights
+        B = P / (-P.diagonal().view(-1, 1) + 1e-12)
+        B.diagonal().zero_()
+        
+        self.weight_matrix = B
         print("EASE fitting complete.")
 
     def forward(self, user_indices):
-        # Efficient inference using Scipy matrix for users and then moving to torch
         users = user_indices.cpu().numpy()
         input_matrix = self.train_matrix_scipy[users].toarray()
         input_tensor = torch.tensor(input_matrix, dtype=torch.float32, device=self.device)

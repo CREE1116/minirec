@@ -127,10 +127,17 @@ class DataLoader:
         n_raw = len(df)
         print(f"  raw interactions : {n_raw:,}")
 
-        if self.config.get('rating_threshold', 0) > 0:
-            rating_col = self.config['columns'][2]
+        # 컬럼 이름 식별
+        col_names = self.config['columns']
+        rating_col = next((c for c in col_names if 'rating' in c.lower()), None)
+        time_col = next((c for c in col_names if 'timestamp' in c.lower() or 'time' in c.lower()), None)
+
+        # Rating 필터링 (컬럼이 존재할 때만)
+        if rating_col and self.config.get('rating_threshold', 0) > 0:
             df = df[df[rating_col] >= self.config['rating_threshold']]
-            print(f"  after rating threshold ({self.config['rating_threshold']}): {len(df):,}  (-{n_raw - len(df):,})")
+            print(f"  after rating threshold ({self.config['rating_threshold']}) on '{rating_col}': {len(df):,}  (-{n_raw - len(df):,})")
+        elif not rating_col and self.config.get('rating_threshold', 0) > 0:
+            print(f"  [Warning] rating_threshold set but no 'rating' column found. Skipping rating filter.")
 
         if self.config.get('dedup', True):
             before = len(df)
@@ -153,6 +160,13 @@ class DataLoader:
         tr = self.config.get('train_ratio', 0.8)
         vr = self.config.get('valid_ratio', 0.1)
         seed = self.config.get('seed', 42)
+
+        # Split Method 검증 및 경고
+        is_temporal = 'temporal' in split_method or split_method == 'loo'
+        if is_temporal and not time_col:
+            print(f"\n[!!! WARNING !!!] Split method '{split_method}' requires 'timestamp' column, but it was NOT found in columns: {col_names}.")
+            print(f"Falling back to 'random' split to prevent crash, but results will NOT be chronologically ordered.\n")
+            split_method = 'random'
 
         if split_method == 'loo':
             self.train_df, self.valid_df, self.test_df = split_loo(self.df)

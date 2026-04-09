@@ -75,8 +75,15 @@ def split_random(df, train_ratio=0.8, valid_ratio=0.1, seed=42):
     valid_end = (total_counts_v * (train_ratio + valid_ratio)).astype(int)
     
     mask_lt3 = total_counts_v < 3
-    valid_end = np.where((total_counts_v >= 3) & (valid_end >= total_counts_v), total_counts_v - 1, valid_end)
-    train_end = np.where((total_counts_v >= 3) & (train_end >= valid_end), valid_end - 1, train_end)
+    # valid_ratio가 0보다 클 때만 validation set을 위해 공간 확보
+    if valid_ratio > 0:
+        valid_end = np.where((total_counts_v >= 3) & (valid_end >= total_counts_v), total_counts_v - 1, valid_end)
+        train_end = np.where((total_counts_v >= 3) & (train_end >= valid_end), valid_end - 1, train_end)
+    else:
+        # valid_ratio가 0이면 valid_end는 train_end와 동일하게 설정하여 validation set이 비게 함
+        valid_end = train_end
+        # test set 공간 확보
+        train_end = np.where((total_counts_v >= 3) & (train_end >= total_counts_v), total_counts_v - 1, train_end)
     
     return df_shuffled[(cum_counts < train_end) | mask_lt3].copy(), \
            df_shuffled[(~mask_lt3) & (cum_counts >= train_end) & (cum_counts < valid_end)].copy(), \
@@ -96,8 +103,15 @@ def split_temporal_ratio(df, train_ratio=0.8, valid_ratio=0.1):
     valid_end = (total_counts_v * (train_ratio + valid_ratio)).astype(int)
     
     mask_lt3 = total_counts_v < 3
-    valid_end = np.where((total_counts_v >= 3) & (valid_end >= total_counts_v), total_counts_v - 1, valid_end)
-    train_end = np.where((total_counts_v >= 3) & (train_end >= valid_end), valid_end - 1, train_end)
+    # valid_ratio가 0보다 클 때만 validation set을 위해 공간 확보
+    if valid_ratio > 0:
+        valid_end = np.where((total_counts_v >= 3) & (valid_end >= total_counts_v), total_counts_v - 1, valid_end)
+        train_end = np.where((total_counts_v >= 3) & (train_end >= valid_end), valid_end - 1, train_end)
+    else:
+        # valid_ratio가 0이면 valid_end는 train_end와 동일하게 설정하여 validation set이 비게 함
+        valid_end = train_end
+        # test set 공간 확보
+        train_end = np.where((total_counts_v >= 3) & (train_end >= total_counts_v), total_counts_v - 1, train_end)
     
     return df_sorted[(cum_counts < train_end) | mask_lt3].copy(), \
            df_sorted[(~mask_lt3) & (cum_counts >= train_end) & (cum_counts < valid_end)].copy(), \
@@ -292,11 +306,15 @@ class DataLoader:
         return PyTorchDataLoader(ds, batch_size=batch_size, shuffle=True, collate_fn=ds.collate_fn)
 
     def get_validation_loader(self, batch_size):
-        ds = TensorDataset(torch.LongTensor(self.valid_df['user_id'].values.copy()), torch.LongTensor(self.valid_df['item_id'].values.copy()))
+        if len(self.valid_df) == 0:
+            return self.get_final_loader(batch_size)
+        ds = TensorDataset(torch.LongTensor(self.valid_df['user_id'].values.astype(np.int64)), 
+                           torch.LongTensor(self.valid_df['item_id'].values.astype(np.int64)))
         return PyTorchDataLoader(ds, batch_size=batch_size, shuffle=False)
 
     def get_final_loader(self, batch_size):
-        ds = TensorDataset(torch.LongTensor(self.test_df['user_id'].values.copy()), torch.LongTensor(self.test_df['item_id'].values.copy()))
+        ds = TensorDataset(torch.LongTensor(self.test_df['user_id'].values.astype(np.int64)), 
+                           torch.LongTensor(self.test_df['item_id'].values.astype(np.int64)))
         return PyTorchDataLoader(ds, batch_size=batch_size, shuffle=False)
 
 # ============================================================

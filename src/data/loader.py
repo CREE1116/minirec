@@ -156,85 +156,63 @@ class DataLoader:
         valid_path = self.config.get('valid_path')
         test_path = self.config.get('test_path')
         fmt = self.config.get('format', 'csv')
+        sep = self.config.get('separator', ',')
+        cols = self.config['columns']
+        has_header = self.config.get('has_header', False)
+        split_method = self.config.get('split_method', 'pre-split' if train_path else 'loo').lower()
 
         if train_path:
-            print(f"  loading pre-split data (format: {fmt})...")
-            sep = self.config.get('separator', ',')
-            cols = self.config['columns']
-            has_header = self.config.get('has_header', False)
-            
+            print(f"  loading pre-split data files (format: {fmt})...")
             train_df = load_raw_data(train_path, sep, cols, has_header, format=fmt)
             valid_df = load_raw_data(valid_path, sep, cols, has_header, format=fmt) if valid_path else pd.DataFrame(columns=cols)
             test_df = load_raw_data(test_path, sep, cols, has_header, format=fmt) if test_path else pd.DataFrame(columns=cols)
             
-            print(f"  raw train={len(train_df):,}, valid={len(valid_df):,}, test={len(test_df):,}")
-            
-            # Combine all to get consistent ID mapping
-            full_df = pd.concat([train_df, valid_df, test_df], ignore_index=True)
-            _, self.user_map, self.item_map, self.n_users, self.n_items = remap_ids(full_df)
-            
-            def map_df(df):
-                if len(df) == 0: return df.copy()
-                df = df.copy()
-                df['user_id'] = df['user_id'].map(self.user_map).astype(np.int64)
-                df['item_id'] = df['item_id'].map(self.item_map).astype(np.int64)
-                return df
-            
-            self.train_df = map_df(train_df)
-            self.valid_df = map_df(valid_df)
-            self.test_df = map_df(test_df)
-            self.df = pd.concat([self.train_df, self.valid_df, self.test_df], ignore_index=True)
-            
-            density = len(self.df) / (self.n_users * self.n_items) * 100
-            print(f"  users={self.n_users:,}  items={self.n_items:,}  interactions={len(self.df):,}  density={density:.4f}%")
-            
-            split_method = 'pre-split'
+            if split_method == 'pre-split':
+                print(f"  raw train={len(train_df):,}, valid={len(valid_df):,}, test={len(test_df):,}")
+                # Combine all to get consistent ID mapping
+                full_df = pd.concat([train_df, valid_df, test_df], ignore_index=True)
+                _, self.user_map, self.item_map, self.n_users, self.n_items = remap_ids(full_df)
+                
+                def map_df(df):
+                    if len(df) == 0: return df.copy()
+                    df = df.copy()
+                    df['user_id'] = df['user_id'].map(self.user_map).astype(np.int64)
+                    df['item_id'] = df['item_id'].map(self.item_map).astype(np.int64)
+                    return df
+                
+                self.train_df = map_df(train_df)
+                self.valid_df = map_df(valid_df)
+                self.test_df = map_df(test_df)
+                self.df = pd.concat([self.train_df, self.valid_df, self.test_df], ignore_index=True)
+            else:
+                # 합쳐서 새로 분할하는 경우
+                print(f"  merging pre-split files for re-splitting ({split_method})...")
+                df = pd.concat([train_df, valid_df, test_df], ignore_index=True)
         else:
-            # Original loading and splitting logic
+            # Original loading from a single data_path
             df = load_raw_data(self.config['data_path'], self.config['separator'], self.config['columns'], self.config.get('has_header', False), format=fmt)
-            n_raw = len(df)
-            print(f"  raw interactions : {n_raw:,}")
+            print(f"  raw interactions : {len(df):,}")
 
+        # pre-split이 아닌 경우 (새로 합쳐졌거나 data_path에서 로드된 경우) 공통 로직
+        if split_method != 'pre-split':
             # 컬럼 이름 식별
             col_names = self.config['columns']
             rating_col = next((c for c in col_names if 'rating' in c.lower()), None)
             time_col = next((c for c in col_names if 'timestamp' in c.lower() or 'time' in c.lower()), None)
 
-            # Rating 필터링 (컬럼이 존재할 때만)
+            # Rating 필터링
             if rating_col and self.config.get('rating_threshold', 0) > 0:
                 df = df[df[rating_col] >= self.config['rating_threshold']]
-                print(f"  after rating threshold ({self.config['rating_threshold']}) on '{rating_col}': {len(df):,}  (-{n_raw - len(df):,})")
-            elif not rating_col and self.config.get('rating_threshold', 0) > 0:
-                print(f"  [Warning] rating_threshold set but no 'rating' column found. Skipping rating filter.")
-
+            
             if self.config.get('dedup', True):
-                before = len(df)
                 df = df.drop_duplicates(subset=['user_id', 'item_id'], keep='last')
-                if before - len(df):
-                    print(f"  after dedup      : {len(df):,}  (-{before - len(df):,})")
 
-            before = len(df)
             df = filter_interactions(df, self.config.get('min_user_interactions', 5), self.config.get('min_item_interactions', 5))
-            print(f"  after k-core     : {len(df):,}  (-{before - len(df):,})")
-
             self.df, self.user_map, self.item_map, self.n_users, self.n_items = remap_ids(df)
-            if self.n_users == 0 or self.n_items == 0:
-                raise ValueError(f"No data left after filtering for dataset: {self.config.get('dataset_name')}. Check your rating_threshold or k-core settings.")
-                
-            density = len(df) / (self.n_users * self.n_items) * 100
-            print(f"  users={self.n_users:,}  items={self.n_items:,}  interactions={len(df):,}  density={density:.4f}%")
-
-            split_method = self.config.get('split_method', 'loo').lower()
+            
             tr = self.config.get('train_ratio', 0.8)
             vr = self.config.get('valid_ratio', 0.1)
             seed = self.config.get('seed', 42)
-
-            # Split Method 검증 및 경고
-            is_temporal = 'temporal' in split_method or split_method == 'loo'
-            if is_temporal and not time_col:
-                print(f"\n[!!! WARNING !!!] Split method '{split_method}' requires 'timestamp' column, but it was NOT found in columns: {col_names}.")
-                print(f"Falling back to 'random' split to prevent crash, but results will NOT be chronologically ordered.\n")
-                split_method = 'random'
 
             if split_method == 'loo':
                 self.train_df, self.valid_df, self.test_df = split_loo(self.df)
@@ -245,6 +223,8 @@ class DataLoader:
             else:
                 raise ValueError(f"Unknown split method: {split_method}")
 
+        density = len(self.df) / (self.n_users * self.n_items) * 100
+        print(f"  users={self.n_users:,}  items={self.n_items:,}  interactions={len(self.df):,}  density={density:.4f}%")
         print(f"  split ({split_method})  train={len(self.train_df):,}  valid={len(self.valid_df):,}  test={len(self.test_df):,}")
 
         self.train_user_history = self.train_df.groupby('user_id')['item_id'].agg(set).to_dict()

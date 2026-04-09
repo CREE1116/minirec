@@ -19,6 +19,7 @@ class BayesianOptimizer:
         
         self.hpo_cfg = hpo_cfg
         self.maximize = hpo_cfg.get('direction', 'max') == 'max'
+        self.use_test_for_hpo = hpo_cfg.get('use_test_for_hpo', False)
 
         if 'seeds' in hpo_cfg:
             self.seeds = hpo_cfg['seeds']
@@ -118,7 +119,7 @@ class BayesianOptimizer:
         set_seed(current_seed)
         
         # run_func internally calls merge_all_configs
-        metrics = self.run_func(iter_dataset_cfg, model_cfg, hpo_mode=True)
+        metrics = self.run_func(iter_dataset_cfg, model_cfg, hpo_mode=True, use_test_for_hpo=self.use_test_for_hpo)
         val = metrics.get(self.metric)
         if val is None:
             for k, v in metrics.items():

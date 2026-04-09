@@ -1,0 +1,9 @@
+dataset_name: yelp2018
+train_path: data/yelp2018/train.txt
+test_path: data/yelp2018/test.txt
+separator: ' '
+columns: ['user_id', 'item_id']
+format: lightgcn
+min_user_interactions: 0
+min_item_interactions: 0
+dedup: false

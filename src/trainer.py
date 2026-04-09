@@ -42,11 +42,14 @@ class Trainer:
         if self.is_sgd:
             self._train_loop()
 
-        # HPO 모드: validation 결과 반환 (test set 노출 금지)
-        # SGD 모델은 _train_loop에서 이미 best val metrics를 계산했으므로 재사용
+        # HPO 모드: validation 결과 반환 (또는 설정에 따라 test 결과 반환)
         if self.hpo_mode:
             if self._best_val_metrics is not None:
                 return self._best_val_metrics
+            
+            # use_test_for_hpo가 True이면 test set 결과를 반환
+            if self.config.get('use_test_for_hpo', False):
+                return self.evaluate(is_final=True)
             return self.evaluate(is_final=False)
 
         # 일반 모드: test set 최종 평가
@@ -83,7 +86,8 @@ class Trainer:
         m_k = eval_cfg.get('main_metric_k', 20)
         full_m_name = f"{m_name}@{m_k}"
 
-        print(f"Starting SGD Training (Max Epochs: {epochs}, Patience: {patience})...")
+        use_test = self.config.get('use_test_for_hpo', False)
+        print(f"Starting SGD Training (Max Epochs: {epochs}, Patience: {patience}, UseTest: {use_test})...")
 
         for epoch in range(epochs):
             self.model.train()
@@ -97,10 +101,10 @@ class Trainer:
                 optimizer.step()
                 total_loss += loss.item()
             
-            # Epoch-wise Validation
-            val_metrics = self.evaluate(is_final=False)
+            # Epoch-wise Validation (use_test=True인 경우 test set 사용)
+            val_metrics = self.evaluate(is_final=use_test)
             val_val = val_metrics.get(full_m_name, 0)
-            print(f"Epoch {epoch+1}: Loss {total_loss/len(loader):.4f}, Val {full_m_name}: {val_val:.4f}")
+            print(f"Epoch {epoch+1}: Loss {total_loss/len(loader):.4f}, {'Test' if use_test else 'Val'} {full_m_name}: {val_val:.4f}")
             
             if val_val > best_metric:
                 best_metric = val_val
@@ -110,12 +114,12 @@ class Trainer:
             else:
                 patience_counter += 1
                 if patience_counter >= patience:
-                    print(f"Early stopping at epoch {epoch+1} (Best Val {full_m_name}: {best_metric:.4f})")
+                    print(f"Early stopping at epoch {epoch+1} (Best {'Test' if use_test else 'Val'} {full_m_name}: {best_metric:.4f})")
                     break
         
         if best_state:
             self.model.load_state_dict(best_state)
-            print(f"Loaded Best Model (Val {full_m_name}: {best_metric:.4f})")
+            print(f"Loaded Best Model ({'Test' if use_test else 'Val'} {full_m_name}: {best_metric:.4f})")
 
     def evaluate(self, loader=None, is_final=False):
         self.model.eval()

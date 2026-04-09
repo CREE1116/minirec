@@ -12,7 +12,7 @@ from src.hpo.optimizer import BayesianOptimizer
 
 from src.utils.seed import set_seed
 
-def run(dataset_cfg, model_cfg, output_path=None, hpo_mode=False):
+def run(dataset_cfg, model_cfg, output_path=None, hpo_mode=False, use_test_for_hpo=False):
     """
     단일 실험 실행 함수.
     """
@@ -33,6 +33,7 @@ def run(dataset_cfg, model_cfg, output_path=None, hpo_mode=False):
         output_path = config.get('output_path_override', 'output')
     config['output_path_override'] = output_path
     if hpo_mode: config['hpo_mode'] = True
+    if use_test_for_hpo: config['use_test_for_hpo'] = True
     
     # 3. Load Data & Model
     data_loader = DataLoader(config)

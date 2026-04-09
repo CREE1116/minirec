@@ -1,9 +1,11 @@
 import torch
 import numpy as np
+from scipy import sparse
 from .base import BaseModel
+from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
 
 
-# ── DAN 모듈 ──────────────────────────────────────────────────────────────────
+# ── DAN 유틸리티 ──────────────────────────────────────────────────────────────────
 
 def gini_coefficient(values: np.ndarray) -> float:
     """Gini coefficient [0, 1]. 높을수록 인기도 불균등."""
@@ -16,25 +18,19 @@ def gini_coefficient(values: np.ndarray) -> float:
     return (n + 1 - 2 * (cum.sum() / cum[-1])) / n
 
 
-def edge_homophily(G_np: np.ndarray,
+def edge_homophily(X: sparse.csr_matrix,
                    volume_weight_exp: float = 1.5,
                    max_items: int = 5000) -> float:
     """
-    Edge homophily of item-item gram matrix.
-
-    h = Σ_{i<j} w_ij * sim_ij / Σ_{i<j} w_ij
-
-    sim_ij = G_ij / (d_i + d_j - G_ij)   (Jaccard-like)
-    w_ij   = G_ij^v * (G_ij / min(d_i, d_j))
-
-    K > max_items이면 서브샘플링 (메모리 절약)
+    Edge homophily of item-item gram matrix (Efficient Scipy version).
     """
-    K = G_np.shape[0]
-    if K > max_items:
+    # 아이템이 너무 많으면 일부만 샘플링하여 계산
+    if X.shape[1] > max_items:
         rng = np.random.default_rng(42)
-        idx = rng.choice(K, size=max_items, replace=False)
-        G_np = G_np[np.ix_(idx, idx)]
+        idx = sorted(rng.choice(X.shape[1], size=max_items, replace=False))
+        X = X[:, idx]
 
+    G_np = X.T.dot(X).toarray()
     degree = np.diag(G_np).copy()
     degree_sum = degree[:, None] + degree[None, :]
 
@@ -54,82 +50,12 @@ def edge_homophily(G_np: np.ndarray,
     return float(num / den) if den > 0 else 0.0
 
 
-def apply_dan(G: torch.Tensor,
-              X: torch.Tensor,
-              alpha=None,
-              beta=None,
-              volume_weight_exp: float = 1.5,
-              max_items_homophily: int = 5000,
-              eps: float = 1e-12):
-    """
-    DAN 핵심 연산.
-
-    Returns
-    -------
-    G_dan   : 유저 정규화된 gram matrix
-    info    : {'alpha', 'beta', 'gini', 'homophily'}
-    n_i     : item counts (numpy)
-    alpha   : 최종 사용된 alpha
-    """
-    device = G.device
-    G_np = G.detach().cpu().numpy()
-    X_dense = (X.to_dense() if X.is_sparse else X).detach().cpu().numpy()
-
-    n_i = G_np.diagonal().copy()
-    n_u = X_dense.sum(axis=1)
-
-    # α: Gini of item counts
-    gini = gini_coefficient(n_i)
-    alpha_used = gini if alpha is None else alpha
-
-    # β: edge homophily
-    hom = edge_homophily(G_np, volume_weight_exp, max_items_homophily)
-    beta_used = hom if beta is None else beta
-
-    info = {'alpha': alpha_used, 'beta': beta_used,
-            'gini': gini, 'homophily': hom}
-
-    # 유저 정규화: X_tilde = D_U^{-β} X
-    u_weight = np.power(n_u + eps, -beta_used)
-    X_tilde  = X_dense * u_weight[:, None]
-
-    G_dan_np = X_tilde.T @ X_tilde
-    G_dan = torch.tensor(G_dan_np, dtype=torch.float32, device=device)
-
-    return G_dan, info, n_i, alpha_used
-
-
-def apply_item_norm(W: torch.Tensor,
-                    n_i: np.ndarray,
-                    alpha: float,
-                    eps: float = 1e-12) -> torch.Tensor:
-    """
-    DAN 아이템 정규화 후처리.
-
-    W_final[i,j] = W[i,j] * (1/n_i^{-(1-α)}) * n_j^{-(1-α)}
-                 = W[i,j] * n_i^{(1-α)} * n_j^{-(1-α)}
-    """
-    device = W.device
-    item_power = torch.tensor(
-        np.power(n_i + eps, -(1 - alpha)),
-        dtype=torch.float32, device=device
-    )
-    return W * (1.0 / (item_power + eps)).unsqueeze(1) * item_power.unsqueeze(0)
-
-
 # ── EASE + DAN ────────────────────────────────────────────────────────────────
 
 class EASE_DAN(BaseModel):
     """
     EASE with Data-Adaptive Normalization (DAN)
-    Park et al., SIGIR 2025.
-
-    α = Gini(n_i)         → 아이템 인기도 불균등도 (자동)
-    β = EdgeHomophily(G)  → 이웃 유사도 (자동)
-
-    G_dan  = (D_U^{-β} X)^T (D_U^{-β} X)
-    W_ease = EASE(G_dan)
-    W      = D_I^{(1-α)} W_ease D_I^{-(1-α)}
+    Optimized with Scipy.
     """
 
     def __init__(self, config, data_loader):
@@ -141,44 +67,58 @@ class EASE_DAN(BaseModel):
         self.max_items_hom     = config['model'].get('max_items_homophily', 5000)
         self.eps               = 1e-12
         self.weight_matrix = None
-        self.train_matrix  = None
+        self.train_matrix_scipy = None
 
     def fit(self, data_loader):
         print(f"Fitting EASE_DAN (lambda={self.reg_lambda}) on {self.device}...")
-        X = self.get_train_matrix(data_loader)
-        self.train_matrix = X
+        X = get_train_matrix_scipy(data_loader)
+        self.train_matrix_scipy = X
 
-        G = torch.sparse.mm(X.t(), X.to_dense()).to(self.device)
+        item_counts = np.array(X.sum(axis=0)).flatten()
+        user_counts = np.array(X.sum(axis=1)).flatten()
 
-        G_dan, info, n_i, alpha = apply_dan(
-            G, X,
-            alpha=self.alpha_config, beta=self.beta_config,
-            volume_weight_exp=self.volume_weight_exp,
-            max_items_homophily=self.max_items_hom,
-        )
-        print(f"  Gini={info['gini']:.4f}, Homophily={info['homophily']:.4f}")
-        print(f"  α={info['alpha']:.4f}, β={info['beta']:.4f}")
+        # 자동 alpha, beta 계산
+        gini = gini_coefficient(item_counts)
+        alpha = self.alpha_config if self.alpha_config is not None else gini
+        
+        # homophily 계산 (필요한 경우에만)
+        if self.beta_config is None:
+            beta = edge_homophily(X, self.volume_weight_exp, self.max_items_hom)
+        else:
+            beta = self.beta_config
+            
+        print(f"  Gini={gini:.4f}, α={alpha:.4f}, β={beta:.4f}")
 
-        A = G_dan + self.reg_lambda * torch.eye(G.shape[0], device=self.device)
-        try:
-            P = torch.linalg.inv(A)
-        except (torch._C._LinAlgError, RuntimeError):
-            A.diagonal().add_(self.reg_lambda * 10 + 1e-4)
-            P = torch.linalg.inv(A)
+        # 유저 정규화 (X_tilde = D_U^{-β} X)
+        print("  computing gram matrix with user normalization...")
+        X_T_weighted = X.multiply(np.power(user_counts + self.eps, -beta).reshape(-1, 1)).T
+        G_dan = X_T_weighted.dot(X).toarray()
 
-        diag_P = P.diagonal()
+        # Ridge Regression
+        A = G_dan.copy()
+        A[np.diag_indices(self.n_items)] += self.reg_lambda
+        
+        print("  inverting matrix...")
+        P = np.linalg.inv(A)
+        diag_P = np.diag(P)
+        
         W = P / (-diag_P + self.eps)
-        W.diagonal().zero_()
-        W = apply_item_norm(W, n_i, alpha, self.eps)
-        W.diagonal().zero_()
+        np.fill_diagonal(W, 0)
+        
+        # 아이템 정규화 후처리
+        # W_final = D_I^{(1-α)} W D_I^{-(1-α)}
+        item_power = np.power(item_counts + self.eps, -(1 - alpha))
+        W = W * (1.0 / (item_power + self.eps)).reshape(-1, 1) * item_power.reshape(1, -1)
+        np.fill_diagonal(W, 0)
 
-        self.weight_matrix = W
+        self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)
         print("EASE_DAN fitting complete.")
 
     def forward(self, user_indices):
-        if not hasattr(self, 'train_matrix_dense'):
-            self.train_matrix_dense = self.train_matrix.to_dense().to(self.device)
-        return self.train_matrix_dense[user_indices] @ self.weight_matrix
+        users = user_indices.cpu().numpy()
+        input_matrix = self.train_matrix_scipy[users].toarray()
+        input_tensor = torch.tensor(input_matrix, dtype=torch.float32, device=self.device)
+        return input_tensor @ self.weight_matrix
 
     def calc_loss(self, batch_data):
         return (torch.tensor(0.0, device=self.device),), None
@@ -189,8 +129,7 @@ class EASE_DAN(BaseModel):
 class DLAE_DAN(BaseModel):
     """
     DLAE with Data-Adaptive Normalization (DAN)
-
-    EASE_DAN + dropout 앙상블 규제 (DLAE 스타일)
+    Optimized with Scipy.
     """
 
     def __init__(self, config, data_loader):
@@ -203,51 +142,56 @@ class DLAE_DAN(BaseModel):
         self.max_items_hom     = config['model'].get('max_items_homophily', 5000)
         self.eps               = 1e-12
         self.weight_matrix = None
-        self.train_matrix  = None
+        self.train_matrix_scipy = None
 
     def fit(self, data_loader):
-        print(f"Fitting DLAE_DAN (lambda={self.reg_lambda}, "
-              f"dropout={self.dropout_p}) on {self.device}...")
-        X = self.get_train_matrix(data_loader)
-        self.train_matrix = X
+        print(f"Fitting DLAE_DAN (lambda={self.reg_lambda}, dropout={self.dropout_p}) on {self.device}...")
+        X = get_train_matrix_scipy(data_loader)
+        self.train_matrix_scipy = X
 
-        G = torch.sparse.mm(X.t(), X.to_dense()).to(self.device)
+        item_counts = np.array(X.sum(axis=0)).flatten()
+        user_counts = np.array(X.sum(axis=1)).flatten()
 
-        G_dan, info, n_i, alpha = apply_dan(
-            G, X,
-            alpha=self.alpha_config, beta=self.beta_config,
-            volume_weight_exp=self.volume_weight_exp,
-            max_items_homophily=self.max_items_hom,
-        )
-        print(f"  Gini={info['gini']:.4f}, Homophily={info['homophily']:.4f}")
-        print(f"  α={info['alpha']:.4f}, β={info['beta']:.4f}")
+        gini = gini_coefficient(item_counts)
+        alpha = self.alpha_config if self.alpha_config is not None else gini
+        
+        if self.beta_config is None:
+            beta = edge_homophily(X, self.volume_weight_exp, self.max_items_hom)
+        else:
+            beta = self.beta_config
+            
+        print(f"  Gini={gini:.4f}, α={alpha:.4f}, β={beta:.4f}")
 
-        # DLAE 규제
-        n_i_t = torch.tensor(n_i, dtype=torch.float32, device=self.device)
+        # 유저 정규화
+        print("  computing gram matrix with user normalization...")
+        X_T_weighted = X.multiply(np.power(user_counts + self.eps, -beta).reshape(-1, 1)).T
+        G_dan = X_T_weighted.dot(X).toarray()
+
+        # DLAE Dropout 규제
+        # lmbda = reg_lambda + (p/(1-p)) * item_counts
         p = min(self.dropout_p, 0.99)
-        w = (p / (1.0 - p)) * n_i_t
+        w_dropout = (p / (1.0 - p)) * item_counts
+        
+        A = G_dan.copy()
+        A[np.diag_indices(self.n_items)] += (w_dropout + self.reg_lambda)
+        
+        print("  solving linear system...")
+        # W = (G_dan + diag(w_dropout + lambda))^{-1} G_dan
+        self.weight_matrix_np = np.linalg.solve(A, G_dan)
+        
+        # 아이템 정규화 후처리
+        item_power = np.power(item_counts + self.eps, -(1 - alpha))
+        W = self.weight_matrix_np * (1.0 / (item_power + self.eps)).reshape(-1, 1) * item_power.reshape(1, -1)
+        np.fill_diagonal(W, 0)
 
-        A = G_dan.clone()
-        A.diagonal().add_(w + self.reg_lambda)
-        try:
-            P = torch.linalg.inv(A)
-        except (torch._C._LinAlgError, RuntimeError):
-            A.diagonal().add_(self.reg_lambda * 10 + 1e-4)
-            P = torch.linalg.inv(A)
-
-        lmbda = w + self.reg_lambda
-        W = torch.eye(G.shape[0], device=self.device) - P * lmbda.unsqueeze(0)
-        W.diagonal().zero_()
-        W = apply_item_norm(W, n_i, alpha, self.eps)
-        W.diagonal().zero_()
-
-        self.weight_matrix = W
+        self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)
         print("DLAE_DAN fitting complete.")
 
     def forward(self, user_indices):
-        if not hasattr(self, 'train_matrix_dense'):
-            self.train_matrix_dense = self.train_matrix.to_dense().to(self.device)
-        return self.train_matrix_dense[user_indices] @ self.weight_matrix
+        users = user_indices.cpu().numpy()
+        input_matrix = self.train_matrix_scipy[users].toarray()
+        input_tensor = torch.tensor(input_matrix, dtype=torch.float32, device=self.device)
+        return input_tensor @ self.weight_matrix
 
     def calc_loss(self, batch_data):
         return (torch.tensor(0.0, device=self.device),), None

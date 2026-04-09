@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
+import numpy as np
 from .base import BaseModel
+from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
 
 class IPS_LAE(BaseModel):
     def __init__(self, config, data_loader):
@@ -9,40 +11,50 @@ class IPS_LAE(BaseModel):
         self.wbeta = config['model'].get('wbeta', 0.4)
         self.wtype = config['model'].get('wtype', 'logsigmoid')  # powerlaw | logsigmoid
         self.weight_matrix = None
-        self.train_matrix = None
+        self.train_matrix_scipy = None
 
     def _compute_inv_propensity(self, X):
-        pop = torch.sparse.sum(X, dim=0).to_dense()
+        # Use Scipy for faster sum operation
+        pop = np.array(X.sum(axis=0)).flatten()
         if self.wtype == 'powerlaw':
-            norm_pop = pop / (torch.max(pop) + 1e-12)
-            p = torch.pow(norm_pop, self.wbeta)
+            norm_pop = pop / (np.max(pop) + 1e-12)
+            p = np.pow(norm_pop, self.wbeta)
         elif self.wtype == 'logsigmoid':
-            log_freqs = torch.log(pop + 1)
-            alpha_logit = -self.wbeta * (torch.min(log_freqs) + torch.max(log_freqs)) / 2
-            p = torch.sigmoid(alpha_logit + self.wbeta * log_freqs)
+            log_freqs = np.log(pop + 1)
+            alpha_logit = -self.wbeta * (np.min(log_freqs) + np.max(log_freqs)) / 2
+            p = 1 / (1 + np.exp(-(alpha_logit + self.wbeta * log_freqs)))
         else:
-            p = torch.ones_like(pop)
+            p = np.ones_like(pop)
         return 1 / (p + 1e-12)
 
     def fit(self, data_loader):
-        print(f"Fitting IPS_LAE (wtype={self.wtype}, wbeta={self.wbeta}) on {self.device}...")
-        X = self.get_train_matrix(data_loader)
-        self.train_matrix = X
+        print(f"Fitting IPS_LAE (wtype={self.wtype}, wbeta={self.wbeta}, lambda={self.reg_lambda}) on {self.device}...")
+        
+        X = get_train_matrix_scipy(data_loader)
+        self.train_matrix_scipy = X
 
-        G = torch.sparse.mm(X.t(), X.to_dense()).to(self.device)
-        G.diagonal().add_(self.reg_lambda)
-        P = torch.linalg.inv(G)
+        print("  computing gram matrix...")
+        G = compute_gram_matrix(X)
+        G[np.diag_indices(self.n_items)] += self.reg_lambda
+        
+        print("  inverting matrix...")
+        P = np.linalg.inv(G)
 
-        B = P / (-P.diagonal() + 1e-12)
-        B.diagonal().zero_()
-        B = B * self._compute_inv_propensity(X).to(self.device)
-        self.weight_matrix = B
+        B = P / (-np.diag(P) + 1e-12)
+        np.fill_diagonal(B, 0)
+        
+        # Apply propensity weighting
+        inv_p = self._compute_inv_propensity(X)
+        B = B * inv_p # Element-wise multiply with items
+        
+        self.weight_matrix = torch.tensor(B, dtype=torch.float32, device=self.device)
         print("IPS_LAE fitting complete.")
 
     def forward(self, user_indices):
-        if not hasattr(self, 'train_matrix_dense'):
-            self.train_matrix_dense = self.train_matrix.to_dense().to(self.device)
-        return self.train_matrix_dense[user_indices] @ self.weight_matrix
+        users = user_indices.cpu().numpy()
+        input_matrix = self.train_matrix_scipy[users].toarray()
+        input_tensor = torch.tensor(input_matrix, dtype=torch.float32, device=self.device)
+        return input_tensor @ self.weight_matrix
 
     def calc_loss(self, batch_data):
         return (torch.tensor(0.0, device=self.device),), None

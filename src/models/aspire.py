@@ -1,20 +1,13 @@
 import torch
+import numpy as nn
+import numpy as np
 from .base import BaseModel
-
+from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
 
 class Aspire(BaseModel):
     """
     ASPIRE: Spectral Purification via Signal-to-Noise Ratio (d^2/S)
-    implemented with standard Ridge Regression (Diagonal enabled).
-
-    SNR을 로그 공간에서 추정 (geometric mean 기준 정규화):
-        log(λ_i) = 2·log(n_i) - log(S_i)
-        λ_i_robust = exp(log(λ_i) - mean(log(λ_i)))
-                   = (n_i²/S_i) / GM(n_i²/S_i)
-
-    1. λ_i = exp(2·log(n_i) - log(S_i) - μ)  (log-space robust SNR)
-    2. G_tilde = Λ^{-α/2} G Λ^{-α/2}
-    3. W = (G_tilde + λI)^{-1} G_tilde  (Standard Ridge Regression)
+    optimized with Scipy Gram matrix calculation.
     """
 
     def __init__(self, config, data_loader):
@@ -23,46 +16,47 @@ class Aspire(BaseModel):
         self.alpha      = config['model'].get('alpha', 1.0)
         self.eps        = 1e-12
         self.weight_matrix = None
-        self.train_matrix  = None
+        self.train_matrix_scipy = None
 
     def fit(self, data_loader):
-        print(f"Fitting Aspire (ridge with diagonal enabled), lambda={self.reg_lambda}, alpha={self.alpha}) "
-              f"on {self.device}...")
-        X = self.get_train_matrix(data_loader)
-        self.train_matrix = X
+        print(f"Fitting Aspire (lambda={self.reg_lambda}, alpha={self.alpha}) on {self.device}...")
+        
+        X = get_train_matrix_scipy(data_loader)
+        self.train_matrix_scipy = X
 
         # ── 1. Gram matrix G = X^T X ──────────────────────────────────────
-        G = torch.sparse.mm(X.t(), X.to_dense()).to(self.device)
-        d = G.diagonal()       # n_i: 아이템 자기 에너지 (≈ popularity)
-        S = G.sum(dim=1)       # S_i: 그램 행합 (공출현 에너지)
+        print("  computing gram matrix...")
+        G = compute_gram_matrix(X)
+        d = G.diagonal()       # n_i: 아이템 자기 에너지
+        S = G.sum(axis=1)      # S_i: 그램 행합
 
         # ── 2. Log-space robust SNR ────────────────────────────────────────
-        log_lambda = 2.0 * torch.log(d + self.eps) - torch.log(S + self.eps)
+        log_lambda = 2.0 * np.log(d + self.eps) - np.log(S + self.eps)
         log_lambda_centered = log_lambda - log_lambda.mean()
-        reliability = log_lambda_centered.exp()
+        reliability = np.exp(log_lambda_centered)
 
         # ── 3. G_tilde = Λ^{-α/2} G Λ^{-α/2} ────────────────────────────
-        scale_factor = torch.pow(reliability + self.eps, -self.alpha / 2.0)
-        # scale_factor = torch.pow(d, -self.alpha / 2.0)
-        G_tilde = G * scale_factor.unsqueeze(1) * scale_factor.unsqueeze(0)
+        scale_factor = np.power(reliability + self.eps, -self.alpha / 2.0)
+        G_tilde = G * scale_factor[:, None] * scale_factor[None, :]
 
-        # ── 4. Standard Ridge Regression (Diagonal enabled) ──────────────
-        A = G_tilde.clone()
-        A.diagonal().add_(self.reg_lambda)
-
-
-        # W = (G_tilde + λI)^{-1} G_tilde
-        # linalg.solve가 inv보다 수치적으로 더 안정적입니다.
-        P = torch.linalg.inv(A)
-        B = P / (-P.diagonal())
-        B.diagonal().zero_()
-        self.weight_matrix = B
+        # ── 4. Standard Ridge Regression (EASE style) ──────────────
+        print("  solving/inverting matrix...")
+        A = G_tilde.copy()
+        A[np.diag_indices(self.n_items)] += self.reg_lambda
+        
+        # P = (G_tilde + λI)^{-1}
+        P = np.linalg.inv(A)
+        B = P / (-np.diag(P))
+        np.fill_diagonal(B, 0)
+        
+        self.weight_matrix = torch.tensor(B, dtype=torch.float32, device=self.device)
         print("Aspire fitting complete.")
 
     def forward(self, user_indices):
-        if not hasattr(self, 'train_matrix_dense'):
-            self.train_matrix_dense = self.train_matrix.to_dense().to(self.device)
-        return self.train_matrix_dense[user_indices] @ self.weight_matrix
+        users = user_indices.cpu().numpy()
+        input_matrix = self.train_matrix_scipy[users].toarray()
+        input_tensor = torch.tensor(input_matrix, dtype=torch.float32, device=self.device)
+        return input_tensor @ self.weight_matrix
 
     def calc_loss(self, batch_data):
         return (torch.tensor(0.0, device=self.device),), None

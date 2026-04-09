@@ -13,11 +13,14 @@ def deep_merge(base, override):
     return result
 
 def load_yaml(path):
-    """YAML 파일을 로드합니다."""
-    if path and os.path.exists(path):
-        with open(path, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f) or {}
-    return {}
+    """YAML 파일을 로드합니다. 파일이 없으면 에러를 발생시킵니다."""
+    if not path:
+        return {}
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"YAML config file not found at: {os.path.abspath(path)}")
+    
+    with open(path, 'r', encoding='utf-8') as f:
+        return yaml.safe_load(f) or {}
 
 def merge_all_configs(dataset_config, model_config, eval_config_path=None):
     """마스터 eval (기본값) -> dataset -> model 순서로 deep merge."""

@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 import numpy as np
-from scipy import sparse
 from .base import BaseModel
+from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
 
 class EASE(BaseModel):
     def __init__(self, config, data_loader):
@@ -14,25 +14,21 @@ class EASE(BaseModel):
     def fit(self, data_loader):
         print(f"Fitting EASE (lambda={self.reg_lambda}) on {self.device}...")
         
-        # 1. Gram Matrix calculation on CPU (Sparse)
-        train_df = data_loader.train_df
-        row = train_df['user_id'].values
-        col = train_df['item_id'].values
-        data = np.ones(len(train_df), dtype=np.float32)
-        X = sparse.csr_matrix((data, (row, col)), shape=(self.n_users, self.n_items))
-        self.train_matrix_scipy = X
+        # Use shared utility for efficient sparse matrix loading
+        self.train_matrix_scipy = get_train_matrix_scipy(data_loader)
+        X = self.train_matrix_scipy
 
         print("  computing gram matrix (CPU)...")
-        G = X.T.dot(X).toarray()
+        G_np = compute_gram_matrix(X)
         
-        # 2. Move to GPU for fast inversion
+        # Move to GPU for fast inversion
         print(f"  inverting matrix on {self.device}...")
-        G = torch.tensor(G, dtype=torch.float32, device=self.device)
+        G = torch.tensor(G_np, dtype=torch.float32, device=self.device)
         G.diagonal().add_(self.reg_lambda)
         
         P = torch.linalg.inv(G)
         
-        # 3. Final weights
+        # Final weights
         B = P / (-P.diagonal().view(-1, 1) + 1e-12)
         B.diagonal().zero_()
         

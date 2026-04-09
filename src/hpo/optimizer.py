@@ -110,10 +110,14 @@ class BayesianOptimizer:
                 for k in keys[:-1]: d = d.setdefault(k, {})
                 d[keys[-1]] = val
         
+        # [중요] 원본 설정을 그대로 복사하여 데이터 유실 방지
         iter_dataset_cfg = copy.deepcopy(self.dataset_cfg)
-        iter_dataset_cfg['seed'] = current_seed
+        if isinstance(iter_dataset_cfg, dict):
+            iter_dataset_cfg['seed'] = current_seed
+        
         set_seed(current_seed)
         
+        # run_func internally calls merge_all_configs
         metrics = self.run_func(iter_dataset_cfg, model_cfg, hpo_mode=True)
         val = metrics.get(self.metric)
         if val is None:

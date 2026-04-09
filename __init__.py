@@ -53,10 +53,14 @@ def run(dataset_cfg, model_cfg, output_path=None, hpo_mode=False):
 def hporun(dataset_cfg, model_cfg, hpo_cfg, n_trials=20):
     """
     하이퍼파라미터 탐색 실행 함수 (멀티시드 지원).
+    mode: 'bayesian' (기본값) 또는 'grid'
     """
-    # BayesianOptimizer가 hpo_cfg를 통해 멀티시드를 처리함
+    # BayesianOptimizer가 hpo_cfg를 통해 멀티시드 및 탐색 모드(bayesian/grid)를 처리함
     optimizer = BayesianOptimizer(run, dataset_cfg, model_cfg, hpo_cfg)
+
+    # grid 모드일 경우 n_trials를 무시하거나 search 내부에서 처리하도록 함
     summary = optimizer.search(n_trials=n_trials)
-    
-    print(f"HPO Finished.")
+
+    print(f"HPO ({hpo_cfg.get('mode', 'bayesian')}) Finished.")
     return summary
+

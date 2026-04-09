@@ -1,0 +1,8 @@
+model:
+  model_name: "ease_dan"
+  reg_lambda: 100.0
+  alpha: null  # Gini coefficient based (Auto)
+  beta: null   # Edge homophily based (Auto)
+  volume_weight_exp: 1.5
+  max_items_homophily: 5000
+  device: "auto"

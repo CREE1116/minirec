@@ -14,7 +14,7 @@ _main_metric = f"{_eval_cfg.get('main_metric', 'NDCG')}@{_eval_cfg.get('main_met
 datasets = [
     'configs/datasets/ml-100k.yaml',
     'configs/datasets/ml-1m.yaml',
-    'configs/datasets/steam.yaml',
+    # 'configs/datasets/steam.yaml',
 ]
 
 # 2. 모델별 HPO 설정 리스트
@@ -22,90 +22,91 @@ experiments = [
     {
         'name': 'EASE',
         'model_cfg': 'configs/models/ease.yaml',
-        'params': [{'name': 'reg_lambda', 'type': 'float', 'range': '0.01 100000.0', 'log': True}]
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'range': '10 100 200 300 400 500 600 700 800 900 1000'}]
     },
     {
         'name' : 'ips_lae',
         'model_cfg': 'configs/models/ips_lae.yaml',
-        'params': [{'name': 'reg_lambda', 'type': 'float', 'range': '0.1 10000.0', 'log': True},
-                   {'name': 'propensity_gamma', 'type': 'float', 'range': '0.0 1.0'}]
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'range': '10 100 200 300 400 500 600 700 800 900 1000'},
+                   {'name': 'wbeta', 'type': 'float', 'range': '0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0'}]
     },
     {
         'name' : 'dlae',
         'model_cfg': 'configs/models/dlae.yaml',
-        'params': [{'name': 'reg_lambda', 'type': 'float', 'range': '0.1 10000.0', 'log': True},
-                   {'name': 'dropout_p', 'type': 'float', 'range': '0.0 0.9'}]
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'range': '10 100 200 300 400 500 600 700 800 900 1000'},
+                   {'name': 'dropout_p', 'type': 'float', 'range': '0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0'}]
     },
     {
         'name' : 'aspire',
         'model_cfg': 'configs/models/aspire.yaml',
-        'params': [{'name': 'reg_lambda', 'type': 'float', 'range': '0.1 10000.0', 'log': True},
-                   {'name': 'alpha', 'type': 'float', 'range': '0.0 2.0'}]
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'range': '500 600 700 800 900 1000 2000 3000 4000 5000'},
+                   {'name': 'alpha', 'type': 'float', 'range': '0.0 0.2 0.4 0.6 0.8 1.0 1.2 1.4 1.6 1.8 2.0'}]
     },
     {
         'name' : 'aspire_diag',
         'model_cfg': 'configs/models/aspire_diag.yaml',
-        'params': [{'name': 'reg_lambda', 'type': 'float', 'range': '0.1 10000.0', 'log': True},
-                   {'name': 'alpha', 'type': 'float', 'range': '0.0 2.0'}]
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'range': '500 600 700 800 900 1000 2000 3000 4000 5000'},
+                   {'name': 'alpha', 'type': 'float', 'range': '0.0 0.2 0.4 0.6 0.8 1.0 1.2 1.4 1.6 1.8 2.0'}]
     },
     {
         'name' : 'aspire_rowsum',
         'model_cfg': 'configs/models/aspire_rowsum.yaml',
-        'params': [{'name': 'reg_lambda', 'type': 'float', 'range': '0.1 10000.0', 'log': True},
-                   {'name': 'alpha', 'type': 'float', 'range': '0.0 2.0'}]
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'range': '500 600 700 800 900 1000 2000 3000 4000 5000'},
+                   {'name': 'alpha', 'type': 'float', 'range': '0.0 0.2 0.4 0.6 0.8 1.0 1.2 1.4 1.6 1.8 2.0'}]
     },
     {
         'name' : 'daspire',
         'model_cfg': 'configs/models/daspire.yaml',
-        'params': [{'name': 'reg_lambda', 'type': 'float', 'range': '1.0 10000.0', 'log': True},
-                   {'name': 'alpha', 'type': 'float', 'range': '0.0 2.0'},
-                   {'name': 'dropout_p', 'type': 'float', 'range': '0.0 0.9'}]
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'range': '500 600 700 800 900 1000 2000 3000 4000 5000'},
+                   {'name': 'alpha', 'type': 'float', 'range': '0.0 0.2 0.4 0.6 0.8 1.0 1.2 1.4 1.6 1.8 2.0'},
+                   {'name': 'dropout_p', 'type': 'float', 'range': '0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0'}]
     },
     {
         'name' : 'daspire_diag',
         'model_cfg': 'configs/models/daspire_diag.yaml',
-        'params': [{'name': 'reg_lambda', 'type': 'float', 'range': '1.0 10000.0', 'log': True},
-                   {'name': 'alpha', 'type': 'float', 'range': '0.0 2.0'},
-                   {'name': 'dropout_p', 'type': 'float', 'range': '0.0 0.9'}]
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'range': '500 600 700 800 900 1000 2000 3000 4000 5000'},
+                   {'name': 'alpha', 'type': 'float', 'range': '0.0 0.2 0.4 0.6 0.8 1.0 1.2 1.4 1.6 1.8 2.0'},
+                   {'name': 'dropout_p', 'type': 'float', 'range': '0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0'}]
     },
     {
         'name' : 'daspire_rowsum',
         'model_cfg': 'configs/models/daspire_rowsum.yaml',
-        'params': [{'name': 'reg_lambda', 'type': 'float', 'range': '1.0 10000.0', 'log': True},
-                   {'name': 'alpha', 'type': 'float', 'range': '0.0 2.0'},
-                   {'name': 'dropout_p', 'type': 'float', 'range': '0.0 0.9'}]
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'range': '500 600 700 800 900 1000 2000 3000 4000 5000'},
+                   {'name': 'alpha', 'type': 'float', 'range': '0.0 0.2 0.4 0.6 0.8 1.0 1.2 1.4 1.6 1.8 2.0'},
+                   {'name': 'dropout_p', 'type': 'float', 'range': '0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0'}]
     },
     {
-        'name' : 'mf',
-        'model_cfg': 'configs/models/mf.yaml',
-        'params': [{'name': 'embedding_dim', 'type': 'int', 'range': '64 256'},
-                   {'name': 'reg_weight', 'type': 'float', 'range': '1e-6 1e-1', 'log': True},
-                   {'name': 'train.lr', 'type': 'float', 'range': '0.0001 0.01', 'log': True}]
+        'name' : 'ease_dan',
+        'model_cfg': 'configs/models/ease_dan.yaml',
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'range': '0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0'},
+                   {'name': 'alpha', 'type': 'float', 'range': '0.0 0.2 0.4 0.6 0.8 1.0 1.2 1.4 1.6 1.8 2.0'},
+                   {'name': 'beta', 'type': 'float', 'range': '0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0'}]
     },
     {
-        'name' : 'lightgcn',
-        'model_cfg': 'configs/models/lightgcn.yaml',
-        'params': [{'name': 'embedding_dim', 'type': 'int', 'range': '64 256'},
-                   {'name': 'n_layers', 'type': 'int', 'range': '1 3'},
-                   {'name': 'reg_weight', 'type': 'float', 'range': '1e-6 1e-1', 'log': True},
-                   {'name': 'train.lr', 'type': 'float', 'range': '0.0001 0.01', 'log': True}]
+        'name' : 'dlae_dan',
+        'model_cfg': 'configs/models/dlae_dan.yaml',
+            'params': [{'name': 'reg_lambda', 'type': 'float', 'range': '0.001 0.002 0.003 0.004 0.005 0.006 0.007 0.008 0.009 0.01 0.02 0.03 0.04 0.05 0.06 0.07 0.08 0.09 0.1 0.5 1 5 10 20 30 40 50'},
+                    {'name': 'dropout_p', 'type': 'float', 'range': '0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0'},
+                   {'name': 'alpha', 'type': 'float', 'range': '0.0 0.2 0.4 0.6 0.8 1.0 1.2 1.4 1.6 1.8 2.0'},
+                   {'name': 'beta', 'type': 'float', 'range': '0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0'}]
     },
 ]
 
 hpo_cfg = {
+    'mode': 'grid',
     'direction': 'max',
-    'n_seeds': 5,
-    'patience': 20
+    'n_seeds': 1,
 }
 
 def generate_global_report():
     """
-    hpo_results와 test_run 결과를 모두 취합하여 하나의 CSV로 저장
+    hpo_results와 test_run 결과를 모두 취합하여 하나의 CSV로 저장 (정렬 포함)
     """
     report_root = 'output/global_reports'
     os.makedirs(report_root, exist_ok=True)
     
     collected_data = []
+    main_metric_mean = f"{_main_metric}_mean"
     
     # 1. HPO 결과 수집
     hpo_files = glob.glob(os.path.join('output/hpo_results', "**", "final_summary.json"), recursive=True)
@@ -114,9 +115,7 @@ def generate_global_report():
         if len(parts) < 3: continue
         d_name, m_name = parts[-3], parts[-2]
         
-        # 하이퍼파라미터 정보 로드 (best_params.json)
         hparams = {}
-        # 시드별 폴더가 있는 경우 첫 번째 시드 정보를 대표로 사용
         best_param_files = glob.glob(os.path.join(os.path.dirname(f), "seed_*", "best_params.json"))
         if best_param_files:
             try:
@@ -124,16 +123,18 @@ def generate_global_report():
                     hparams = json.load(bp)
             except: pass
 
-        with open(f, 'r') as j:
-            data = json.load(j)
-            entry = {
-                'dataset': d_name, 
-                'model': f"{m_name}(HPO)", 
-                'type': 'HPO',
-                'hyperparameters': json.dumps(hparams)
-            }
-            entry.update(data)
-            collected_data.append(entry)
+        try:
+            with open(f, 'r') as j:
+                data = json.load(j)
+                entry = {
+                    'dataset': d_name, 
+                    'model': f"{m_name}(HPO)", 
+                    'type': 'HPO',
+                    'hyperparameters': json.dumps(hparams)
+                }
+                entry.update(data)
+                collected_data.append(entry)
+        except: pass
             
     # 2. Test Run 결과 수집
     test_run_files = glob.glob(os.path.join('output/test_run', "**", "metrics.json"), recursive=True)
@@ -141,30 +142,34 @@ def generate_global_report():
         parts = os.path.normpath(f).split(os.sep)
         if len(parts) < 3: continue
         d_name, m_name = parts[-3], parts[-2]
-        with open(f, 'r') as j:
-            data = json.load(j)
-            entry = {
-                'dataset': d_name, 
-                'model': f"{m_name}(Default)", 
-                'type': 'Default',
-                'hyperparameters': 'Default YAML Config'
-            }
-            for k, v in data.items():
-                entry[f"{k}_mean"] = v
-                entry[f"{k}_std"] = 0.0
-            collected_data.append(entry)
+        try:
+            with open(f, 'r') as j:
+                data = json.load(j)
+                entry = {
+                    'dataset': d_name, 
+                    'model': f"{m_name}(Default)", 
+                    'type': 'Default',
+                    'hyperparameters': 'Default YAML Config'
+                }
+                for k, v in data.items():
+                    entry[f"{k}_mean"] = v
+                    entry[f"{k}_std"] = 0.0
+                collected_data.append(entry)
+        except: pass
             
     if not collected_data:
         print("No results to aggregate.")
         return
 
     df = pd.DataFrame(collected_data)
-    main_metric_mean = f"{_main_metric}_mean"
     
+    # [정렬 로직] 데이터셋 오름차순, 메인 메트릭 내림차순
     if main_metric_mean in df.columns:
+        # 수치형 변환 보장
+        df[main_metric_mean] = pd.to_numeric(df[main_metric_mean], errors='coerce')
         df = df.sort_values(by=['dataset', main_metric_mean], ascending=[True, False])
     
-    # 컬럼 순서 조정 (하이퍼파라미터를 앞쪽으로)
+    # 컬럼 순서 조정
     cols = list(df.columns)
     if 'hyperparameters' in cols:
         cols.remove('hyperparameters')
@@ -175,7 +180,7 @@ def generate_global_report():
     df.to_csv(csv_path, index=False)
     
     print(f"\n{'='*30} GLOBAL INTEGRATED REPORT {'='*30}")
-    for d_name in sorted(df['dataset'].unique()):
+    for d_name in df['dataset'].unique():
         df_d = df[df['dataset'] == d_name]
         display_cols = ['model', 'type', main_metric_mean]
         p_cols = [c for c in display_cols if c in df_d.columns]
@@ -199,9 +204,8 @@ for d_cfg_path in datasets:
             dataset_cfg=d_cfg_path,
             model_cfg=exp['model_cfg'],
             hpo_cfg=hpo_cfg,
-            n_trials=50
+            n_trials=None # 그리드 모드에서는 모든 조합 시도
         )
-        # 각 모델이 끝날 때마다 전체 리포트 갱신
         generate_global_report()
 
 print(f"\n{'='*80}\n✨ All HPO experiments finished!\n{'='*80}")

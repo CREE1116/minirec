@@ -28,8 +28,9 @@ class BayesianOptimizer:
 
         self.patience = hpo_cfg.get('patience', 20)
         self.params_list = hpo_cfg.get('params', [])
+        self.mode = hpo_cfg.get('mode', 'bayesian').lower()
 
-        # HPO objective는 항상 evaluation config의 main_metric을 사용 (단일 출처)
+        # HPO objective는 항상 evaluation config의 main_metric을 사용
         _eval_cfg = merge_all_configs(self.dataset_cfg, self.model_cfg).get('evaluation', {})
         self.metric = f"{_eval_cfg.get('main_metric', 'NDCG')}@{_eval_cfg.get('main_metric_k', 20)}"
         
@@ -43,147 +44,129 @@ class BayesianOptimizer:
         self.hpo_root = os.path.join(self.base_output_root, 'hpo_results', self.dataset_name, self.model_name)
         os.makedirs(self.hpo_root, exist_ok=True)
         
-        # int_for_k 타입을 위한 max_k 계산용 DataLoader 초기화 (필요할 때만)
         self._max_k = None
 
-    def get_max_k(self):
-        if self._max_k is None:
-            from src.data.loader import DataLoader
-            # 임시 설정을 만들어 데이터 로더 로드
-            temp_config = merge_all_configs(self.dataset_cfg, self.model_cfg)
-            print(f"[HPO] Loading DataLoader to determine max_k...")
-            temp_dl = DataLoader(temp_config)
-            
-            # 현실적인 최대 k값 설정 (아이템 수 vs 2000 중 작은 값)
-            data_full_rank = min(temp_dl.n_users, temp_dl.n_items) - 1
-            self._max_k = min(data_full_rank, 2000)
-            
-            print(f"[HPO] Determined max_k: {self._max_k} (Full Rank: {data_full_rank})")
-        return self._max_k
-
-    def objective(self, trial, current_seed):
-        model_cfg = copy.deepcopy(self.model_cfg)
-
+    def get_search_space(self):
+        """Grid Search를 위한 search_space 생성"""
+        search_space = {}
         for p_def in self.params_list:
             name = p_def['name']
             p_type = p_def.get('type', 'float')
             p_range = p_def.get('range')
-            p_log = p_def.get('log', False)
-
-            if p_type == 'float':
-                if p_range is None: raise ValueError(f"Parameter '{name}' of type 'float' requires 'range' definition.")
-                low, high = map(float, p_range.split())
-                val = trial.suggest_float(name, low, high, log=p_log)
-            elif p_type == 'int':
-                if p_range is None: raise ValueError(f"Parameter '{name}' of type 'int' requires 'range' definition.")
-                low, high = map(int, p_range.split())
-                val = trial.suggest_int(name, low, high, log=p_log)
-            elif p_type == 'int_for_k':
-                max_k = self.get_max_k()
-                val = trial.suggest_int(name, 1, max_k)
-            elif p_type == 'categorical':
-                if p_range is None: raise ValueError(f"Parameter '{name}' of type 'categorical' requires 'range' definition.")
+            
+            if p_type == 'categorical':
                 choices = p_range
                 if isinstance(choices, str):
                     choices = choices.split()
-                val = trial.suggest_categorical(name, choices)
+                search_space[name] = choices
+            elif p_type == 'int':
+                low, high = map(int, p_range.split())
+                search_space[name] = list(range(low, high + 1))
+            elif p_type == 'float':
+                points = p_range.split()
+                search_space[name] = [float(x) for x in points]
+        return search_space
 
-            # '.'이 없으면 'model' 섹션에 속한 파라미터로 간주
-            target_path = name if '.' in name else f"model.{name}"
-            keys = target_path.split('.')
-            
-            d = model_cfg
-            for k in keys[:-1]:
-                d = d.setdefault(k, {})
-            d[keys[-1]] = val
+    def objective(self, trial, current_seed):
+        model_cfg = copy.deepcopy(self.model_cfg)
+
+        if self.mode == 'grid':
+            # Grid mode: search_space에 정의된 값만 사용하도록 강제
+            search_space = self.get_search_space()
+            for name, choices in search_space.items():
+                val = trial.suggest_categorical(name, choices)
+                
+                target_path = name if '.' in name else f"model.{name}"
+                keys = target_path.split('.')
+                d = model_cfg
+                for k in keys[:-1]:
+                    d = d.setdefault(k, {})
+                d[keys[-1]] = val
+        else:
+            # Bayesian mode
+            for p_def in self.params_list:
+                name = p_def['name']
+                p_type = p_def.get('type', 'float')
+                p_range = p_def.get('range')
+                p_log = p_def.get('log', False)
+
+                if p_type == 'float':
+                    low, high = map(float, p_range.split()[:2])
+                    val = trial.suggest_float(name, low, high, log=p_log)
+                elif p_type == 'int':
+                    low, high = map(int, p_range.split()[:2])
+                    val = trial.suggest_int(name, low, high, log=p_log)
+                elif p_type == 'int_for_k':
+                    max_k = self.get_max_k()
+                    val = trial.suggest_int(name, 1, max_k)
+                elif p_type == 'categorical':
+                    choices = p_range
+                    if isinstance(choices, str): choices = choices.split()
+                    val = trial.suggest_categorical(name, choices)
+
+                target_path = name if '.' in name else f"model.{name}"
+                keys = target_path.split('.')
+                d = model_cfg
+                for k in keys[:-1]: d = d.setdefault(k, {})
+                d[keys[-1]] = val
         
         iter_dataset_cfg = copy.deepcopy(self.dataset_cfg)
         iter_dataset_cfg['seed'] = current_seed
         set_seed(current_seed)
         
-        # run_func internally merges dataset_cfg and model_cfg
         metrics = self.run_func(iter_dataset_cfg, model_cfg, hpo_mode=True)
-        
         val = metrics.get(self.metric)
         if val is None:
             for k, v in metrics.items():
                 if self.metric in k:
                     val = v
                     break
-        
         return val if val is not None else 0.0
 
+    def get_max_k(self):
+        if self._max_k is None:
+            from src.data.loader import DataLoader
+            temp_config = merge_all_configs(self.dataset_cfg, self.model_cfg)
+            temp_dl = DataLoader(temp_config)
+            data_full_rank = min(temp_dl.n_users, temp_dl.n_items) - 1
+            self._max_k = min(data_full_rank, 2000)
+        return self._max_k
+
     def save_results(self, study, output_dir):
-        """Save study results: CSV and visualizations"""
         os.makedirs(output_dir, exist_ok=True)
-        
         try:
             df = study.trials_dataframe()
-            csv_path = os.path.join(output_dir, 'trials.csv')
-            df.to_csv(csv_path, index=False)
-        except Exception as e: print(f"Error saving CSV: {e}")
-
-        try:
-            import matplotlib.pyplot as plt
-            trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
-            
-            if len(trials) > 0:
-                plt.figure(figsize=(10, 6))
-                values = [t.value for t in trials]
-                best_values = [np.max(values[:i+1]) if self.maximize else np.min(values[:i+1]) for i in range(len(values))]
-                
-                plt.plot(values, marker='o', alpha=0.5, label='Objective Value')
-                plt.plot(best_values, color='red', linewidth=2, label='Best Value')
-                plt.xlabel('Trial'); plt.ylabel('Metric Value')
-                plt.title('Optimization History')
-                plt.legend(); plt.grid(True, alpha=0.3)
-                plt.savefig(os.path.join(output_dir, 'optimization_history.png'))
-                plt.close()
-
-            if len(self.params_list) > 1:
-                try:
-                    importance = optuna.importance.get_param_importances(study)
-                    plt.figure(figsize=(10, 6))
-                    plt.barh(list(importance.keys()), list(importance.values()))
-                    plt.xlabel('Importance'); plt.title('Hyperparameter Importance')
-                    plt.tight_layout(); plt.savefig(os.path.join(output_dir, 'param_importance.png'))
-                    plt.close()
-                except Exception as e: print(f"Could not calculate importance: {e}")
-
-            for p_def in self.params_list:
-                p_name = p_def['name']
-                try:
-                    plt.figure(figsize=(8, 6))
-                    x_vals = [t.params[p_name] for t in trials if p_name in t.params]
-                    y_vals = [t.value for t in trials if p_name in t.params]
-                    plt.scatter(x_vals, y_vals, alpha=0.6)
-                    plt.xlabel(p_name); plt.ylabel('Metric Value')
-                    plt.title(f'Slice Plot: {p_name}')
-                    if p_def.get('log', False): plt.xscale('log')
-                    plt.grid(True, alpha=0.3)
-                    plt.savefig(os.path.join(output_dir, f'slice_{p_name.replace(".", "_")}.png'))
-                    plt.close()
-                except Exception as e: print(f"Error plotting slice for {p_name}: {e}")
-        except Exception as e: print(f"Error generating visualizations: {e}")
+            df.to_csv(os.path.join(output_dir, 'trials.csv'), index=False)
+        except: pass
 
     def search(self, n_trials=20):
         all_seed_results = []
         all_best_params = []
         
         for seed in self.seeds:
-            print(f"\n>>> Starting HPO for Seed: {seed}")
+            print(f"\n>>> Starting HPO ({self.mode.upper()}) for Seed: {seed}")
             seed_dir = os.path.join(self.hpo_root, f"seed_{seed}")
             os.makedirs(seed_dir, exist_ok=True)
             
-            sampler = optuna.samplers.TPESampler(seed=seed)
+            if self.mode == 'grid':
+                search_space = self.get_search_space()
+                sampler = optuna.samplers.GridSampler(search_space)
+                actual_n_trials = None # GridSampler는 모든 조합 완료 시 자동 중단
+                print(f"[Grid Mode] Search Space: {search_space}")
+            else:
+                sampler = optuna.samplers.TPESampler(seed=seed)
+                actual_n_trials = n_trials
+
             study = optuna.create_study(direction='maximize' if self.maximize else 'minimize', sampler=sampler)
             
+            # Early Stopping Callback (Grid 모드에서는 미사용)
             class EarlyStoppingCallback:
-                def __init__(self, patience, maximize):
-                    self.patience, self.maximize = patience, maximize
+                def __init__(self, patience, maximize, mode):
+                    self.patience, self.maximize, self.mode = patience, maximize, mode
                     self.best_score = -np.inf if maximize else np.inf
                     self.count = 0
                 def __call__(self, study, trial):
+                    if self.mode == 'grid': return
                     if trial.state == optuna.trial.TrialState.COMPLETE:
                         is_better = trial.value > self.best_score if self.maximize else trial.value < self.best_score
                         if is_better: self.best_score, self.count = trial.value, 0
@@ -191,19 +174,17 @@ class BayesianOptimizer:
                             self.count += 1
                             if self.count >= self.patience: study.stop()
 
-            study.optimize(lambda t: self.objective(t, seed), n_trials=n_trials, 
-                           callbacks=[EarlyStoppingCallback(self.patience, self.maximize)])
+            study.optimize(lambda t: self.objective(t, seed), n_trials=actual_n_trials, 
+                           callbacks=[EarlyStoppingCallback(self.patience, self.maximize, self.mode)])
             
             self.save_results(study, seed_dir)
-            
-            print(f"Seed {seed} HPO finished. Evaluating BEST on Test set...")
             best_params = study.best_params
             all_best_params.append(best_params)
             
-            # [추가] 각 시드별 최적 파라미터 별도 저장
             with open(os.path.join(seed_dir, 'best_params.json'), 'w') as f:
                 json.dump(best_params, f, indent=4)
 
+            # Evaluate BEST
             best_model_cfg = copy.deepcopy(self.model_cfg)
             for name, val in best_params.items():
                 target_path = name if '.' in name else f"model.{name}"
@@ -216,16 +197,12 @@ class BayesianOptimizer:
             best_dataset_cfg['seed'] = seed
             set_seed(seed)
             
-            test_metrics = self.run_func(
-                best_dataset_cfg, 
-                best_model_cfg, 
-                output_path=os.path.join(seed_dir, 'best_test_run'),
-                hpo_mode=False 
-            )
+            test_metrics = self.run_func(best_dataset_cfg, best_model_cfg, 
+                                        output_path=os.path.join(seed_dir, 'best_test_run'),
+                                        hpo_mode=False)
             all_seed_results.append(test_metrics)
 
         summary = self.report_final_results(all_seed_results)
-        # 요약 결과에 시드별 최적 파라미터 정보 포함
         summary['best_params_per_seed'] = all_best_params
         return summary
 
@@ -242,5 +219,4 @@ class BayesianOptimizer:
         summary_path = os.path.join(self.hpo_root, 'final_summary.json')
         with open(summary_path, 'w') as f:
             json.dump(summary, f, indent=4)
-        print(f"{'#'*60}\nSummary saved to: {summary_path}")
         return summary

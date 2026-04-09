@@ -16,6 +16,8 @@ from .daspire_rowsum import DAspireRowsum
 from .bspm import BSPM
 from .turbocf import TurboCF
 from .alpha_ease import AlphaEASE
+from .aspire_pure import AspirePure
+from .dan import EASE_DAN, DLAE_DAN
 
 MODEL_REGISTRY = {
     'ease': EASE,
@@ -35,7 +37,10 @@ MODEL_REGISTRY = {
     'daspire_rowsum': DAspireRowsum,
     'bspm': BSPM,
     'turbocf': TurboCF,
-    'alpha_ease': AlphaEASE
+    'alpha_ease': AlphaEASE,
+    'aspire_pure': AspirePure,
+    'ease_dan': EASE_DAN,
+    'dlae_dan': DLAE_DAN,
 }
 
 def get_model(model_name, config, data_loader):

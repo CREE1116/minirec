@@ -18,6 +18,8 @@ from .turbocf import TurboCF
 from .alpha_ease import AlphaEASE
 from .aspire_pure import AspirePure
 from .dan import EASE_DAN, DLAE_DAN
+from .aspire_ips import AspireIPS
+from .rlae import RLAE, RDLAE
 
 MODEL_REGISTRY = {
     'ease': EASE,
@@ -41,6 +43,9 @@ MODEL_REGISTRY = {
     'aspire_pure': AspirePure,
     'ease_dan': EASE_DAN,
     'dlae_dan': DLAE_DAN,
+    'aspire_ips': AspireIPS,
+    'rlae': RLAE,
+    'rdlae': RDLAE,
 }
 
 def get_model(model_name, config, data_loader):

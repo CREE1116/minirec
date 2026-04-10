@@ -1,0 +1,4 @@
+model:
+  model_name: "aspire_ips"
+  reg_lambda: 100.0
+  alpha: 1.0 # 2nd-order energy normalization strength

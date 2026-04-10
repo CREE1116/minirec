@@ -19,7 +19,7 @@ class EASE(BaseModel):
         X = self.train_matrix_scipy
 
         print("  computing gram matrix (CPU)...")
-        G_np = compute_gram_matrix(X)
+        G_np = compute_gram_matrix(X, data_loader)
         
         # Move to GPU for fast inversion
         print(f"  inverting matrix on {self.device}...")

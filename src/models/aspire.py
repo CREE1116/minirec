@@ -25,7 +25,7 @@ class Aspire(BaseModel):
 
         # ── 1. Gram matrix G = X^T X (CPU) ──────────────────────────────────
         print("  computing gram matrix (CPU)...")
-        G_np = compute_gram_matrix(X)
+        G_np = compute_gram_matrix(X, data_loader)
         
         # ── 2. Move to GPU for fast SNR and Scaling ──────────────────────────
         G = torch.tensor(G_np, dtype=torch.float32, device=self.device)

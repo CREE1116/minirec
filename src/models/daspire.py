@@ -20,14 +20,14 @@ class DAspire(BaseModel):
 
     def fit(self, data_loader):
         print(f"Fitting DAspire (lambda={self.reg_lambda}, alpha={self.alpha}, p={self.dropout_p}) on {self.device}...")
-        
+
         X = get_train_matrix_scipy(data_loader)
         self.train_matrix_scipy = X
 
         # ── 1. Gram matrix G = X^T X (CPU) ──────────────────────────────────
         print("  computing gram matrix (CPU)...")
-        G_np = compute_gram_matrix(X)
-        
+        G_np = compute_gram_matrix(X, data_loader)
+
         # ── 2. Move to GPU for fast SNR and Scaling ──────────────────────────
         G = torch.tensor(G_np, dtype=torch.float32, device=self.device)
         d = G.diagonal()
@@ -59,3 +59,4 @@ class DAspire(BaseModel):
 
     def calc_loss(self, batch_data):
         return (torch.tensor(0.0, device=self.device),), None
+

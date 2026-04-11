@@ -93,7 +93,8 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
     # Accumulators
     sums = defaultdict(float)
     counts = defaultdict(float)
-    rec_counts = torch.zeros(n_items, device=device, dtype=torch.float32) # For Coverage/Novelty
+    # rec_counts per K for strict diversity metrics
+    rec_counts_dict = {k: torch.zeros(n_items, device=device, dtype=torch.float32) for k in top_k_list}
 
     batch_size = test_loader.batch_size
     unique_users = torch.arange(n_users, device=device)
@@ -107,16 +108,12 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
             scores = model.forward(u_ids)  # (B, n_items)
 
             # 2. Vectorized Masking (Mask seen items)
-            # Use index_select with COO tensors for best stability on CUDA
-            history_batch = torch.index_select(user_history_sp, 0, u_ids).to_dense()
-            scores[history_batch > 0] = -1e10
+            history_batch = torch.index_select(user_history_sp, 0, u_ids).to_dense() > 0
+            scores[history_batch] = -1e10
 
             # 3. Get Top-K
             _, top_idx = torch.topk(scores, k=max_k, dim=1)
             
-            # Update rec_counts for diversity metrics
-            rec_counts.scatter_add_(0, top_idx.flatten(), torch.ones(B * max_k, device=device))
-
             # 4. Vectorized Ground-Truth Check
             gt_batch = torch.index_select(test_gt_sp, 0, u_ids).to_dense() > 0
             gt_sizes = gt_batch.sum(dim=1).float()
@@ -125,6 +122,10 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
             hit_mat = torch.gather(gt_batch.float(), 1, top_idx)
 
             for k in top_k_list:
+                # Update rec_counts strictly for this K
+                current_top_k = top_idx[:, :k].flatten()
+                rec_counts_dict[k].scatter_add_(0, current_top_k, torch.ones(current_top_k.size(0), device=device))
+
                 hk = hit_mat[:, :k]
                 hit_sum = hk.sum(dim=1)
                 n_rel = gt_sizes.clamp(max=k).long()
@@ -186,7 +187,7 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
                 key = f'{g}{m}@{k}'
                 if key in sums: final[key] = sums[key] / counts.get(key, 1)
 
-    return final, rec_counts, group_masks
+    return final, rec_counts_dict, group_masks
 
 
 def evaluate_metrics(model, data_loader, eval_config, device, test_loader, is_final=False):
@@ -227,7 +228,7 @@ def evaluate_metrics(model, data_loader, eval_config, device, test_loader, is_fi
     test_gt_sp      = build_sparse_matrix(test_loader, n_users, n_items)
 
     # ── 2. Run Evaluation Loop ────────────────────────────────────────────────
-    final_results, rec_counts, group_masks = _evaluate_full(
+    final_results, rec_counts_dict, group_masks = _evaluate_full(
         model, test_loader, top_k_list, metrics_list, device, 
         user_history_sp, test_gt_sp, item_pop,
         eval_config.get('head_ratio', 0.8), eval_config.get('mid_ratio', 0.1)
@@ -238,8 +239,8 @@ def evaluate_metrics(model, data_loader, eval_config, device, test_loader, is_fi
         item_pop_t = torch.tensor(item_pop, dtype=torch.float32, device=device)
     
     for k in top_k_list:
-        # Note: In streaming mode, rec_counts reflects max_k recommendations.
-        # For precise @k diversity, we'd need to accumulate per k, but usually @max_k is enough for diversity.
+        rec_counts = rec_counts_dict[k]
+        
         if 'Coverage' in metrics_list:
             final_results[f'Coverage@{k}'] = (rec_counts > 0).float().mean().item()
         if 'GiniIndex' in metrics_list:

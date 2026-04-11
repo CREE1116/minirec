@@ -72,6 +72,13 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
     log2_w    = torch.tensor(_LOG2_RECIP[:max_k], dtype=torch.float32, device=device)
     idcg_lut  = torch.tensor(_IDCG_TABLE[:max_k + 1], dtype=torch.float32, device=device)
 
+    # Precompute popularity tensor for PopRatio
+    pop_tensor = None
+    mean_pop = 1.0
+    if 'PopRatio' in metrics_list and item_popularity is not None:
+        pop_tensor = torch.tensor(item_popularity, dtype=torch.float, device=device)
+        mean_pop   = pop_tensor.mean().item()
+
     # Group Masks (Head, Mid, Tail)
     group_masks = {}
     needed_groups = [g for g in ['Head', 'Mid', 'Tail'] if any(m.startswith(g) for m in metrics_list) or (g == 'Tail' and 'LongTail' in str(metrics_list))]

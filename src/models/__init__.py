@@ -5,7 +5,7 @@ from .gf_cf import GF_CF
 from .ials import iALS
 from .lightgcn import LightGCN
 from .ips_lae import IPS_LAE
-from .lira import LIRA
+from .lae import LAE
 from .dlae import DLAE
 from .aspire import Aspire
 from .daspire import DAspire
@@ -31,7 +31,7 @@ MODEL_REGISTRY = {
     'ials': iALS,
     'lightgcn': LightGCN,
     'ips_lae': IPS_LAE,
-    'lira': LIRA,
+    'lae': LAE,
     'dlae': DLAE,
     'aspire': Aspire,
     'daspire': DAspire,

@@ -100,8 +100,14 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
             scores = model.forward(u_ids)  # (B, n_items)
 
             # 2. Vectorized Masking (Mask seen items)
-            # Slice CSR matrix and convert to dense for efficient row-wise masking
-            history_batch = user_history_sp[u_ids].to_dense()
+            # Use index_select for better stability with CSR tensors
+            # Slicing CSR can sometimes cause stride errors in beta versions
+            try:
+                history_batch = torch.index_select(user_history_sp, 0, u_ids).to_dense()
+            except:
+                # Fallback: slice then convert to COO if index_select fails
+                history_batch = user_history_sp[u_ids].to_sparse_coo().to_dense()
+            
             scores[history_batch > 0] = -1e10
 
             # 3. Get Top-K
@@ -111,7 +117,10 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
             rec_counts.scatter_add_(0, top_idx.flatten(), torch.ones(B * max_k, device=device))
 
             # 4. Vectorized Ground-Truth Check
-            gt_batch = test_gt_sp[u_ids].to_dense() # (B, n_items) dense
+            try:
+                gt_batch = torch.index_select(test_gt_sp, 0, u_ids).to_dense()
+            except:
+                gt_batch = test_gt_sp[u_ids].to_sparse_coo().to_dense()
             gt_sizes = gt_batch.sum(dim=1)
             
             # hit_mat: 1 if recommended item is in GT

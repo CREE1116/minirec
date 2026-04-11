@@ -100,14 +100,8 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
             scores = model.forward(u_ids)  # (B, n_items)
 
             # 2. Vectorized Masking (Mask seen items)
-            # Use index_select for better stability with CSR tensors
-            # Slicing CSR can sometimes cause stride errors in beta versions
-            try:
-                history_batch = torch.index_select(user_history_sp, 0, u_ids).to_dense()
-            except:
-                # Fallback: slice then convert to COO if index_select fails
-                history_batch = user_history_sp[u_ids].to_sparse_coo().to_dense()
-            
+            # Use index_select with COO tensors for best stability on CUDA
+            history_batch = torch.index_select(user_history_sp, 0, u_ids).to_dense()
             scores[history_batch > 0] = -1e10
 
             # 3. Get Top-K
@@ -117,10 +111,7 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
             rec_counts.scatter_add_(0, top_idx.flatten(), torch.ones(B * max_k, device=device))
 
             # 4. Vectorized Ground-Truth Check
-            try:
-                gt_batch = torch.index_select(test_gt_sp, 0, u_ids).to_dense()
-            except:
-                gt_batch = test_gt_sp[u_ids].to_sparse_coo().to_dense()
+            gt_batch = torch.index_select(test_gt_sp, 0, u_ids).to_dense()
             gt_sizes = gt_batch.sum(dim=1)
             
             # hit_mat: 1 if recommended item is in GT
@@ -219,10 +210,11 @@ def evaluate_metrics(model, data_loader, eval_config, device, test_loader, is_fi
                     us.append(u.numpy()); it.append(i.numpy())
                 r, c = np.concatenate(us), np.concatenate(it)
         
-        i = torch.stack([torch.tensor(r, dtype=torch.long), torch.tensor(c, dtype=torch.long)])
-        v = torch.ones(len(r), dtype=torch.float32)
-        # Convert to CSR for row-wise slicing efficiency
-        return torch.sparse_coo_tensor(i, v, (rows, cols)).to(device).to_sparse_csr()
+        i = torch.stack([torch.tensor(r, dtype=torch.long, device=device), 
+                         torch.tensor(c, dtype=torch.long, device=device)])
+        v = torch.ones(len(r), dtype=torch.float32, device=device)
+        # Use Sparse COO for widest compatibility and index_select support
+        return torch.sparse_coo_tensor(i, v, (rows, cols), device=device).coalesce()
 
     user_history_sp = build_sparse_matrix(history_dict, n_users, n_items)
     test_gt_sp      = build_sparse_matrix(test_loader, n_users, n_items)

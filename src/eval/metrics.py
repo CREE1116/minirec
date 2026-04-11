@@ -118,8 +118,8 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
             rec_counts.scatter_add_(0, top_idx.flatten(), torch.ones(B * max_k, device=device))
 
             # 4. Vectorized Ground-Truth Check
-            gt_batch = torch.index_select(test_gt_sp, 0, u_ids).to_dense()
-            gt_sizes = gt_batch.sum(dim=1)
+            gt_batch = torch.index_select(test_gt_sp, 0, u_ids).to_dense() > 0
+            gt_sizes = gt_batch.sum(dim=1).float()
             
             # hit_mat: 1 if recommended item is in GT
             hit_mat = torch.gather(gt_batch.float(), 1, top_idx)

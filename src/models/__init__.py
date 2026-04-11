@@ -46,6 +46,7 @@ MODEL_REGISTRY = {
     'aspire_ips': AspireIPS,
     'rlae': RLAE,
     'rdlae': RDLAE,
+    'drlae': RDLAE,
 }
 
 def get_model(model_name, config, data_loader):

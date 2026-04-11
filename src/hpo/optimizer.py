@@ -48,21 +48,49 @@ class BayesianOptimizer:
         self._max_k = None
 
     def get_search_space(self):
-        """Grid Search를 위한 search_space 생성"""
+        """Grid Search를 위한 search_space 생성 (자동 범위 분할 지원)"""
         search_space = {}
         for p_def in self.params_list:
             name = p_def['name']
             p_type = p_def.get('type', 'float')
-            p_range = p_def.get('range')
             
+            # 1. 자동 범위 분할 (min, max, n_points 설정이 있는 경우)
+            if 'min' in p_def and 'max' in p_def and 'n_points' in p_def:
+                low = float(p_def['min'])
+                high = float(p_def['max'])
+                n = int(p_def['n_points'])
+                scale = p_def.get('scale', 'linear').lower()
+                
+                if scale == 'log':
+                    # 로그 스케일 분할 (0이 포함되지 않도록 주의)
+                    values = np.logspace(np.log10(low), np.log10(high), num=n).tolist()
+                else:
+                    # 선형 스케일 분할
+                    values = np.linspace(low, high, num=n).tolist()
+                
+                # int 타입인 경우 반올림 및 중복 제거
+                if p_type == 'int':
+                    values = sorted(list(set([int(round(v)) for v in values])))
+                
+                search_space[name] = values
+                continue
+
+            # 2. 기존 수동 범위 설정 (range)
+            p_range = p_def.get('range')
             if p_type == 'categorical':
                 choices = p_range
                 if isinstance(choices, str):
                     choices = choices.split()
                 search_space[name] = choices
             elif p_type == 'int':
-                low, high = map(int, p_range.split())
-                search_space[name] = list(range(low, high + 1))
+                # "1 10" -> range(1, 11)
+                parts = p_range.split()
+                if len(parts) == 2:
+                    low, high = map(int, parts)
+                    search_space[name] = list(range(low, high + 1))
+                else:
+                    # "1 2 5 10" -> [1, 2, 5, 10]
+                    search_space[name] = [int(x) for x in parts]
             elif p_type == 'float':
                 points = p_range.split()
                 search_space[name] = [float(x) for x in points]

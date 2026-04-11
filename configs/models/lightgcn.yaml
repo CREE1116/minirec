@@ -3,8 +3,8 @@ model:
   model_name: "LightGCN"
   embedding_dim: 64
   n_layers: 3
-  reg_weight: 1e-4
   device: "auto"
+  reg_weight: 1e-4
 
   train:
     optimizer: "Adam"
@@ -14,5 +14,6 @@ model:
     weight_decay: 0
     patience: 20
     loss_type: "pairwise"
+
     num_negatives: 1
     negative_sampling_strategy: "uniform"

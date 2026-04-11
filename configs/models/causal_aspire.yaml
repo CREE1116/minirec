@@ -1,0 +1,5 @@
+model:
+  model_name: "causal_aspire"
+  reg_lambda: 100.0
+  alpha: 0.5 # 2nd-order energy normalization strength
+  gamma: 0.5 # Causal regularization strength

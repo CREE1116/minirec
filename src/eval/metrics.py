@@ -38,17 +38,38 @@ def get_novelty(flat_recs, item_popularity, num_users=None):
     p_i = (pop[recs] + 1) / (total + len(pop))
     return float(np.mean(-np.log2(p_i + 1e-10)))
 
-def get_long_tail_item_set(item_popularity, head_volume_percent=0.8):
+def get_item_split_sets(item_popularity, head_ratio=0.8, mid_ratio=0.1):
+    """
+    Split items into Head, Mid, and Tail based on interaction volume.
+    - Head: Top items covering head_ratio of interactions.
+    - Mid: Next items covering mid_ratio of interactions.
+    - Tail: Remaining items.
+    """
     pop = pd.Series(item_popularity) if isinstance(item_popularity, np.ndarray) else item_popularity
     sorted_pop = pop.sort_values(ascending=False)
-    cutoff = sorted_pop.sum() * head_volume_percent
-    head_n = int(np.searchsorted(sorted_pop.cumsum().values, cutoff, side='right'))
-    return set(sorted_pop.index[head_n:].tolist())
+    total_vol = sorted_pop.sum()
+    cumsum_vol = sorted_pop.cumsum().values
+    
+    head_cutoff = total_vol * head_ratio
+    mid_cutoff = total_vol * (head_ratio + mid_ratio)
+    
+    head_n = int(np.searchsorted(cumsum_vol, head_cutoff, side='right'))
+    mid_n = int(np.searchsorted(cumsum_vol, mid_cutoff, side='right'))
+    
+    head_items = set(sorted_pop.index[:head_n].tolist())
+    mid_items = set(sorted_pop.index[head_n:mid_n].tolist())
+    tail_items = set(sorted_pop.index[mid_n:].tolist())
+    
+    return head_items, mid_items, tail_items
 
-def get_long_tail_coverage(flat_recs, item_popularity, head_volume_percent=0.8, precomputed_tail_set=None):
-    tail = precomputed_tail_set or get_long_tail_item_set(item_popularity, head_volume_percent)
-    if not tail: return 0.0
-    return len(set(flat_recs) & tail) / len(tail)
+def get_long_tail_item_set(item_popularity, head_volume_percent=0.8):
+    # Deprecated but kept for backward compatibility if needed
+    _, _, tail = get_item_split_sets(item_popularity, head_volume_percent, 1.0 - head_volume_percent)
+    return tail
+
+def get_group_coverage(flat_recs, group_set):
+    if not group_set: return 0.0
+    return len(set(flat_recs) & group_set) / len(group_set)
 
 def get_entropy_from_recs(flat_recs):
     if not flat_recs: return 0.0
@@ -73,7 +94,7 @@ def get_ild(all_top_k_items, item_embeddings):
 # ── Core evaluation (vectorized) ─────────────────────────────────────────────
 
 def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
-                   user_history, item_popularity=None, long_tail_percent=0.8):
+                   user_history, item_popularity=None, head_ratio=0.8, mid_ratio=0.1):
     # Collect ground truth
     if isinstance(test_loader.dataset, TensorDataset):
         all_users = test_loader.dataset.tensors[0].numpy()
@@ -96,18 +117,28 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
     log2_w    = torch.tensor(_LOG2_RECIP[:max_k], dtype=torch.float32, device=device)
     idcg_lut  = torch.tensor(_IDCG_TABLE[:max_k + 1], dtype=torch.float32, device=device)
 
-    # Precompute tail mask
-    tail_item_set = None
-    tail_mask = None
-    need_tail = any(m in metrics_list for m in [
-        'LongTailHitRate', 'LongTailRecall', 'LongTailNDCG',
-        'HeadHitRate', 'HeadRecall', 'HeadNDCG', 'LongTailCoverage'])
-    if item_popularity is not None and need_tail:
-        tail_item_set = get_long_tail_item_set(item_popularity, long_tail_percent)
-        arr = np.zeros(n_items, dtype=bool)
-        for idx in tail_item_set:
-            if idx < n_items: arr[idx] = True
-        tail_mask = torch.tensor(arr, device=device)  # (n_items,)
+    # Group splits (Head, Mid, Tail)
+    group_sets = {'Head': None, 'Mid': None, 'Tail': None}
+    group_masks = {'Head': None, 'Mid': None, 'Tail': None}
+    
+    # Check if we need group-based metrics
+    needed_groups = []
+    for g in ['Head', 'Mid', 'Tail']:
+        if any(m.startswith(g) for m in metrics_list) or (g == 'Tail' and 'LongTailCoverage' in metrics_list):
+            needed_groups.append(g)
+    # Support legacy LongTail metrics mapping to Tail
+    if any(m.startswith('LongTail') for m in metrics_list):
+        if 'Tail' not in needed_groups: needed_groups.append('Tail')
+
+    if item_popularity is not None and needed_groups:
+        head_set, mid_set, tail_set = get_item_split_sets(item_popularity, head_ratio, mid_ratio)
+        group_sets['Head'], group_sets['Mid'], group_sets['Tail'] = head_set, mid_set, tail_set
+        
+        for g, s in group_sets.items():
+            arr = np.zeros(n_items, dtype=bool)
+            for idx in s:
+                if idx < n_items: arr[idx] = True
+            group_masks[g] = torch.tensor(arr, device=device)
 
     # Precompute popularity tensor for PopRatio
     pop_tensor = None
@@ -151,22 +182,22 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
                 gt_mat[i, gts] = True
 
             gt_sizes = gt_mat.sum(dim=1).float()  # (B,)
-
-            # Hit matrix (B, max_k): 1 if top item is in GT
             hit_mat = torch.gather(gt_mat.float(), 1, top_idx)  # (B, max_k)
 
-            # Tail/Head hit matrices (computed once per batch)
-            if tail_mask is not None:
-                tail_gt   = gt_mat & tail_mask          # (B, n_items)
-                head_gt   = gt_mat & ~tail_mask
-                tail_hit  = torch.gather(tail_gt.float(), 1, top_idx)
-                head_hit  = torch.gather(head_gt.float(), 1, top_idx)
-                tail_sizes = tail_gt.sum(dim=1).float()
-                head_sizes = head_gt.sum(dim=1).float()
+            # Group-based hit matrices
+            batch_group_data = {}
+            for g in ['Head', 'Mid', 'Tail']:
+                mask = group_masks[g]
+                if mask is not None:
+                    g_gt = gt_mat & mask
+                    batch_group_data[g] = {
+                        'hit': torch.gather(g_gt.float(), 1, top_idx),
+                        'size': g_gt.sum(dim=1).float()
+                    }
 
             for k in top_k_list:
-                hk       = hit_mat[:, :k]          # (B, k)
-                hit_sum  = hk.sum(dim=1)            # (B,)
+                hk       = hit_mat[:, :k]
+                hit_sum  = hk.sum(dim=1)
                 n_rel    = gt_sizes.clamp(max=k).long()
 
                 if 'HitRate'   in metrics_list: sums[f'HitRate@{k}']   += (hit_sum > 0).float().sum().item()
@@ -177,45 +208,53 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
                     idcg = idcg_lut[n_rel]
                     sums[f'NDCG@{k}'] += (dcg / idcg.clamp(min=1e-8)).sum().item()
 
-                if tail_mask is not None:
-                    tk = tail_hit[:, :k]; ts = tail_sizes; tm = ts > 0
-                    hk2 = head_hit[:, :k]; hs = head_sizes; hm = hs > 0
-
-                    for tag, hmat, sz, mask in [('LongTail', tk, ts, tm), ('Head', hk2, hs, hm)]:
-                        n_valid = mask.sum().item()
+                # Group metrics
+                for g in ['Head', 'Mid', 'Tail']:
+                    if g in batch_group_data:
+                        g_hit = batch_group_data[g]['hit'][:, :k]
+                        g_sz = batch_group_data[g]['size']
+                        g_mask = g_sz > 0
+                        n_valid = g_mask.sum().item()
                         if n_valid == 0: continue
-                        h_v = hmat[mask]; s_v = sz[mask]
+                        
+                        h_v = g_hit[g_mask]; s_v = g_sz[g_mask]
                         h_sum = h_v.sum(dim=1)
-                        if f'{tag}HitRate'  in metrics_list:
-                            sums[f'{tag}HitRate@{k}']  += (h_sum > 0).float().sum().item()
-                            counts[f'{tag}HitRate@{k}'] += n_valid
-                        if f'{tag}Recall'   in metrics_list:
-                            sums[f'{tag}Recall@{k}']   += (h_sum / s_v.clamp(min=1)).sum().item()
-                            counts[f'{tag}Recall@{k}'] += n_valid
-                        if f'{tag}NDCG'     in metrics_list:
-                            dcg_t  = (h_v * log2_w[:k]).sum(dim=1)
-                            idcg_t = idcg_lut[s_v.clamp(max=k).long()]
-                            sums[f'{tag}NDCG@{k}']   += (dcg_t / idcg_t.clamp(min=1e-8)).sum().item()
-                            counts[f'{tag}NDCG@{k}'] += n_valid
+                        
+                        # Handle both current naming (HeadRecall) and legacy (LongTailRecall -> TailRecall)
+                        tags = [g]
+                        if g == 'Tail': tags.append('LongTail')
+                        
+                        for tag in tags:
+                            if f'{tag}HitRate' in metrics_list:
+                                sums[f'{tag}HitRate@{k}'] += (h_sum > 0).float().sum().item()
+                                counts[f'{tag}HitRate@{k}'] += n_valid
+                            if f'{tag}Recall' in metrics_list:
+                                sums[f'{tag}Recall@{k}'] += (h_sum / s_v.clamp(min=1)).sum().item()
+                                counts[f'{tag}Recall@{k}'] += n_valid
+                            if f'{tag}NDCG' in metrics_list:
+                                dcg_t = (h_v * log2_w[:k]).sum(dim=1)
+                                idcg_t = idcg_lut[s_v.clamp(max=k).long()]
+                                sums[f'{tag}NDCG@{k}'] += (dcg_t / idcg_t.clamp(min=1e-8)).sum().item()
+                                counts[f'{tag}NDCG@{k}'] += n_valid
 
                 if pop_tensor is not None:
                     sums[f'PopRatio@{k}'] += (pop_tensor[top_idx[:, :k]].mean(dim=1) / mean_pop).sum().item()
 
                 counts[k] += B
 
-    n_total = len(unique_users)
     final = {}
     for k in top_k_list:
         n = counts[k]
         for m in ['HitRate', 'Recall', 'Precision', 'NDCG', 'PopRatio']:
             key = f'{m}@{k}'
             if key in sums: final[key] = sums[key] / n if n else 0.0
-        for m in ['LongTailHitRate', 'LongTailRecall', 'LongTailNDCG',
-                  'HeadHitRate',     'HeadRecall',     'HeadNDCG']:
-            key = f'{m}@{k}'
-            if key in sums: final[key] = sums[key] / counts.get(key, 1)
+        
+        for g in ['Head', 'Mid', 'Tail', 'LongTail']:
+            for m in ['HitRate', 'Recall', 'NDCG']:
+                key = f'{g}{m}@{k}'
+                if key in sums: final[key] = sums[key] / counts.get(key, 1)
 
-    return final, all_top_k, tail_item_set
+    return final, all_top_k, group_sets
 
 
 def evaluate_metrics(model, data_loader, eval_config, device, test_loader, is_final=False):
@@ -223,12 +262,15 @@ def evaluate_metrics(model, data_loader, eval_config, device, test_loader, is_fi
     metrics_list = eval_config.get('metrics', ['NDCG', 'Recall'])
     history     = data_loader.eval_user_history if is_final else data_loader.train_user_history
     item_pop    = data_loader.item_popularity
-    lt_percent  = eval_config.get('long_tail_percent', 0.8)
+    
+    # Ratios for Head/Mid/Tail
+    head_ratio = eval_config.get('head_ratio', 0.8)
+    mid_ratio = eval_config.get('mid_ratio', 0.1)
 
-    final_results, all_top_k, tail_set = _evaluate_full(
-        model, test_loader, top_k_list, metrics_list, device, history, item_pop, lt_percent)
+    final_results, all_top_k, group_sets = _evaluate_full(
+        model, test_loader, top_k_list, metrics_list, device, history, item_pop, head_ratio, mid_ratio)
 
-    # Embedding-based metrics (computed once, outside per-user loop)
+    # Embedding-based metrics
     emb = None
     with torch.no_grad():
         if hasattr(model, 'item_emb') and hasattr(model.item_emb, 'weight'):
@@ -243,17 +285,22 @@ def evaluate_metrics(model, data_loader, eval_config, device, test_loader, is_fi
         recs_k   = [sub[:k] for sub in all_top_k]
         flat_k   = [it for sub in recs_k for it in sub]
 
-        if 'ILD'             in metrics_list and emb is not None:
-            final_results[f'ILD@{k}']             = get_ild(recs_k, emb)
-        if 'Coverage'        in metrics_list:
-            final_results[f'Coverage@{k}']        = get_coverage(flat_k, data_loader.n_items)
-        if 'GiniIndex'       in metrics_list:
-            final_results[f'GiniIndex@{k}']       = get_gini_index_from_recs(flat_k, data_loader.n_items)
-        if 'LongTailCoverage' in metrics_list:
-            final_results[f'LongTailCoverage@{k}'] = get_long_tail_coverage(flat_k, item_pop, lt_percent, tail_set)
-        if 'Novelty'         in metrics_list:
-            final_results[f'Novelty@{k}']         = get_novelty(flat_k, item_pop)
-        if 'Entropy'         in metrics_list:
-            final_results[f'Entropy@{k}']         = get_entropy_from_recs(flat_k)
+        if 'ILD' in metrics_list and emb is not None:
+            final_results[f'ILD@{k}'] = get_ild(recs_k, emb)
+        if 'Coverage' in metrics_list:
+            final_results[f'Coverage@{k}'] = get_coverage(flat_k, data_loader.n_items)
+        if 'GiniIndex' in metrics_list:
+            final_results[f'GiniIndex@{k}'] = get_gini_index_from_recs(flat_k, data_loader.n_items)
+        if 'Novelty' in metrics_list:
+            final_results[f'Novelty@{k}'] = get_novelty(flat_k, item_pop)
+        if 'Entropy' in metrics_list:
+            final_results[f'Entropy@{k}'] = get_entropy_from_recs(flat_k)
+            
+        # Group Coverage
+        for g in ['Head', 'Mid', 'Tail', 'LongTail']:
+            m_name = f'{g}Coverage'
+            if m_name in metrics_list:
+                g_set = group_sets['Tail'] if g == 'LongTail' else group_sets[g]
+                final_results[f'{m_name}@{k}'] = get_group_coverage(flat_k, g_set)
 
     return final_results

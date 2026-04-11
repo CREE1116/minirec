@@ -1,22 +1,30 @@
-# Global Evaluation Default Configuration
-method: "full" # full, sampled, uni99
+# Global Evaluation Settings
 top_k: [10, 20, 50]
-metrics:
-  [
+metrics: [
     "Recall",
     "NDCG",
     "HitRate",
     "Precision",
-    "LongTailRecall",
-    "LongTailNDCG",
     "HeadRecall",
     "HeadNDCG",
+    "MidRecall",
+    "MidNDCG",
+    "TailRecall",
+    "TailNDCG",
     "Coverage",
-    "LongTailCoverage",
+    "TailCoverage",
+    "MidCoverage",
+    "HeadCoverage",
     "Novelty",
     "GiniIndex",
-    "PopRatio",
-  ]
+    "PopRatio"
+]
+
+# Metric calculation details
 main_metric: "NDCG"
 main_metric_k: 20
-long_tail_percent: 0.8
+
+# Popularity-based splitting (Interaction Volume Ratios)
+head_ratio: 0.8  # Top items covering 80% of interactions
+mid_ratio: 0.1   # Next items covering 10% of interactions
+# tail_ratio: 0.1  # Remaining items (automatically calculated as 1 - head - mid)

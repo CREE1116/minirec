@@ -51,22 +51,19 @@ class CausalAspire(BaseModel):
         G_U = (X_sp.T @ X_u_purified).toarray() # (X.T @ D_U^{-0.5} @ X)
         G_tilde = D_I_inv_fourth @ G_U @ D_I_inv_fourth
 
-        # ── Step 4: Strict EASE Solution (GPU) ──────────────────────────
-        print(f"  step 4: solving strict EASE on {self.device}...")
-        K = X_sp.shape[1]
-        G_torch = torch.tensor(G_tilde, dtype=torch.float32, device=self.device)
-        A_mat = G_torch + self.reg_lambda * torch.eye(K, device=self.device)
-
+        # ── Step 4: Strict EASE Solution (CPU) ──────────────────────────
+        print("  step 4: solving strict EASE (CPU)...")
         # P = (G_tilde + lambda*I)^{-1}
-        P = torch.linalg.inv(A_mat)
+        G_tilde[np.diag_indices_from(G_tilde)] += self.reg_lambda
+        P_np = np.linalg.inv(G_tilde)
         
         # W_{ij} = - P_{ij} / P_{jj} (i != j), W_{ii} = 0
         # EASE의 최적성을 복원하는 해석적 해
-        P_diag = P.diagonal()
-        W = -P / (P_diag.unsqueeze(0) + self.eps)
-        W.fill_diagonal_(0.0)
+        P_diag = np.diag(P_np)
+        W_np = -P_np / (P_diag[np.newaxis, :] + self.eps)
+        np.fill_diagonal(W_np, 0)
 
-        self.weight_matrix = W
+        self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)
         print("Causal ASPIRE (Standardization) fitting complete.")
 
     def forward(self, user_indices):

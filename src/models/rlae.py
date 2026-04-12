@@ -18,24 +18,27 @@ class RLAE(BaseModel):
         self.train_matrix_scipy = None
 
     def fit(self, data_loader):
-        print(f"Fitting RLAE (lambda={self.reg_lambda}, b={self.b}) on {self.device}...")
+        print(f"Fitting RLAE (lambda={self.reg_lambda}, b={self.b}) on CPU...")
         X = get_train_matrix_scipy(data_loader)
         self.train_matrix_scipy = X
         G_np = compute_gram_matrix(X, data_loader)
         
-        G = torch.tensor(G_np, dtype=torch.float32, device=self.device)
-        A = G.clone()
-        A.diagonal().add_(self.reg_lambda)
+        # CPU에서 행렬 연산 수행
+        A = G_np.copy()
+        A[np.diag_indices_from(A)] += self.reg_lambda
         
-        print(f"  inverting matrix on {self.device}...")
-        P = torch.linalg.inv(A)
+        print(f"  inverting matrix on CPU...")
+        P = np.linalg.inv(A)
         
-        diag_P = P.diagonal()
+        diag_P = np.diag(P)
         # penalty = lambda + mu = max(lambda, (1-b)/P_jj)
-        penalty = torch.clamp((1.0 - self.b) / (diag_P + self.eps), min=self.reg_lambda)
+        penalty = np.maximum(self.reg_lambda, (1.0 - self.b) / (diag_P + self.eps))
         
         # W = I - P @ diag(penalty)
-        self.weight_matrix = torch.eye(self.n_items, device=self.device) - P * penalty.view(1, -1)
+        W = - (P * penalty[np.newaxis, :])
+        W[np.diag_indices_from(W)] += 1.0
+        
+        self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)
         print("RLAE fitting complete.")
 
     def forward(self, user_indices):
@@ -63,30 +66,31 @@ class RDLAE(BaseModel):
         self.train_matrix_scipy = None
 
     def fit(self, data_loader):
-        print(f"Fitting RDLAE (lambda={self.reg_lambda}, p={self.dropout_p}, b={self.b}) on {self.device}...")
+        print(f"Fitting RDLAE (lambda={self.reg_lambda}, p={self.dropout_p}, b={self.b}) on CPU...")
         X = get_train_matrix_scipy(data_loader)
         self.train_matrix_scipy = X
         G_np = compute_gram_matrix(X, data_loader)
         
-        G = torch.tensor(G_np, dtype=torch.float32, device=self.device)
-        
         # Lambda_jj = (p/(1-p)) * G_jj + lambda
         p = min(self.dropout_p, 0.99)
-        dropout_penalty = (p / (1.0 - p)) * G.diagonal()
+        dropout_penalty = (p / (1.0 - p)) * np.diag(G_np)
         lambda_diag = dropout_penalty + self.reg_lambda
         
-        A = G.clone()
-        A.diagonal().add_(lambda_diag)
+        A = G_np.copy()
+        A[np.diag_indices_from(A)] += lambda_diag
         
-        print(f"  inverting matrix on {self.device}...")
-        P = torch.linalg.inv(A)
+        print(f"  inverting matrix on CPU...")
+        P = np.linalg.inv(A)
         
-        diag_P = P.diagonal()
+        diag_P = np.diag(P)
         # total_penalty = lambda_jj + mu_j = max(lambda_jj, (1-b)/P_jj)
-        total_penalty = torch.max(lambda_diag, (1.0 - self.b) / (diag_P + self.eps))
+        total_penalty = np.maximum(lambda_diag, (1.0 - self.b) / (diag_P + self.eps))
         
         # W = I - P @ diag(total_penalty)
-        self.weight_matrix = torch.eye(self.n_items, device=self.device) - P * total_penalty.view(1, -1)
+        W = - (P * total_penalty[np.newaxis, :])
+        W[np.diag_indices_from(W)] += 1.0
+        
+        self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)
         print("RDLAE fitting complete.")
 
     def forward(self, user_indices):

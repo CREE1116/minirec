@@ -26,25 +26,21 @@ class LAE(BaseModel):
         print("  computing gram matrix (CPU)...")
         G_np = compute_gram_matrix(X, data_loader)
         
-        # 2. Move to GPU for inversion
-        print(f"  solving linear system on {self.device}...")
-        G = torch.tensor(G_np, dtype=torch.float32, device=self.device)
-        K = G.shape[0]
-        
+        # 2. Solve linear system on CPU to avoid VRAM issues
+        print("  solving linear system (CPU)...")
         # A = G + lambda * I
-        A = G.clone()
-        A.diagonal().add_(self.reg_lambda)
+        A_np = G_np.copy()
+        A_np[np.diag_indices_from(A_np)] += self.reg_lambda
         
-        # S = G @ (G + lambda*I)^-1 
-        # Which is equivalent to solving (G + lambda*I) S^T = G^T
-        # Since G is symmetric: (G + lambda*I) S = G
+        # S = G @ (G + lambda*I)^-1 -> (G + lambda*I) S = G
         try:
-            self.weight_matrix = torch.linalg.solve(A, G)
-        except (torch._C._LinAlgError, RuntimeError):
+            W_np = np.linalg.solve(A_np, G_np)
+        except np.linalg.LinAlgError:
             print("[Warning] Singular matrix, using inverse with stronger regularization.")
-            A.diagonal().add_(1e-4)
-            self.weight_matrix = torch.linalg.solve(A, G)
+            A_np[np.diag_indices_from(A_np)] += 1e-4
+            W_np = np.linalg.solve(A_np, G_np)
 
+        self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)
         print("LAE fitting complete.")
 
     def forward(self, user_indices):

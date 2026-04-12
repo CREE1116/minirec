@@ -21,18 +21,18 @@ class EASE(BaseModel):
         print("  computing gram matrix (CPU)...")
         G_np = compute_gram_matrix(X, data_loader)
         
-        # Move to GPU for fast inversion
-        print(f"  inverting matrix on {self.device}...")
-        G = torch.tensor(G_np, dtype=torch.float32, device=self.device)
-        G.diagonal().add_(self.reg_lambda)
+        # Move to CPU for inversion to avoid VRAM issues
+        print("  inverting matrix (CPU)...")
+        G_np[np.diag_indices_from(G_np)] += self.reg_lambda
         
-        P = torch.linalg.inv(G)
+        P_np = np.linalg.inv(G_np)
         
-        # Final weights
-        B = P / (-P.diagonal().view(-1, 1) + 1e-12)
-        B.diagonal().zero_()
+        # Final weights: B_{ij} = -P_{ij} / P_{jj} (i != j), B_{ii} = 0
+        diag_P = np.diag(P_np)
+        B_np = P_np / (-diag_P[:, np.newaxis] + 1e-12)
+        np.fill_diagonal(B_np, 0)
         
-        self.weight_matrix = B
+        self.weight_matrix = torch.tensor(B_np, dtype=torch.float32, device=self.device)
         print("EASE fitting complete.")
 
     def forward(self, user_indices):

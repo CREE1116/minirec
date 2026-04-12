@@ -22,17 +22,17 @@ class DLAE(BaseModel):
         print("  computing gram matrix (CPU)...")
         G_np = compute_gram_matrix(X)
         
-        # Move to GPU for faster operations
-        G = torch.tensor(G_np, dtype=torch.float32, device=self.device)
-        
+        # Perform calculations on CPU to avoid VRAM issues
         p = min(self.dropout_p, 0.99)
-        w = (p / (1.0 - p)) * G.diagonal()
+        w = (p / (1.0 - p)) * G_np.diagonal()
 
-        G_lhs = G.clone()
-        G_lhs.diagonal().add_(w + self.reg_lambda)
+        G_lhs = G_np.copy()
+        G_lhs[np.diag_indices_from(G_lhs)] += (w + self.reg_lambda)
         
-        print(f"  solving linear system on {self.device}...")
-        self.weight_matrix = torch.linalg.solve(G_lhs, G)
+        print("  solving linear system (CPU)...")
+        W_np = np.linalg.solve(G_lhs, G_np)
+        
+        self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)
         print("DLAE fitting complete.")
 
     def forward(self, user_indices):

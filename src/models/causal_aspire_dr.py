@@ -3,95 +3,98 @@ import numpy as np
 import scipy.sparse as sp
 from .base import BaseModel
 from src.utils.sparse import get_train_matrix_scipy
-from time import time
+
+def gini_coefficient(values: np.ndarray) -> float:
+    """Gini coefficient [0, 1]. 높을수록 인기도 불균등."""
+    values = np.asarray(values, dtype=float).flatten()
+    if values.size == 0 or values.sum() == 0:
+        return 0.0
+    sorted_vals = np.sort(values)
+    n = values.size
+    cum = np.cumsum(sorted_vals)
+    return (n + 1 - 2 * (cum.sum() / cum[-1])) / n
 
 class CausalAspireDR(BaseModel):
     """
-    Causal ASPIRE + 2-Stage Doubly Robust (Causal-DR)
-    - Stage 1: Compute Causal Space (G_tilde) and Base Estimator (W_1)
-    - Stage 2: Compute Asymmetric IPW Matrix (G_IPW)
-    - Stage 3: Closed-form Convex Interpolation for Doubly Robustness
+    Causal ASPIRE with Cross-Purification (CP) + DAN (Post-norm) + RLAE (Relaxation)
+    - CPU-based solver for memory efficiency.
+    - CP: Cross-purified weights for VST.
+    - DAN: Gini-based item-side post-normalization.
+    - RLAE: Relaxation parameter 'b' for diagonal constraints.
     """
 
     def __init__(self, config, data_loader):
         super().__init__(config, data_loader)
         
-        # ──────────────────────────────────────────────────────────
-        # 🔥 인과적 대통일 상수 gamma (기존 alpha, beta를 하나로 통합)
-        # ──────────────────────────────────────────────────────────
         self.gamma      = config['model'].get('gamma', 0.5) 
-        # config에 gamma가 없고 alpha만 있다면 하위 호환성 유지
-            
         self.reg_lambda = config['model'].get('reg_lambda', 10.0) 
-        # self.num_iters  = config['model'].get('num_iters', 10)
+        self.b          = config['model'].get('b', 0.0) # RLAE relaxation: 0=EASE, 1=Ridge
+        self.alpha_cfg  = config['model'].get('alpha', None) # DAN alpha (None = auto)
+        
         self.eps        = 1e-12
-        self.beta = 1.5
         self.weight_matrix = None
         self.train_matrix_scipy = None
 
     def fit(self, data_loader):
-        print(f"Fitting Causal ASPIRE (DR + Symmetric Normalization)...")
+        print(f"Fitting Causal ASPIRE (CP + DAN + RLAE) on CPU...")
+        print(f"  Params: gamma={self.gamma}, lambda={self.reg_lambda}, b={self.b}")
 
         X = get_train_matrix_scipy(data_loader)  # (U, K)
+        X_sq = X.power(2)
         K = X.shape[1]
 
-        # 1. 기존 Global Scaling (raw degree symmetric) ── 유지
-        q_u = np.asarray(X.sum(axis=1)).ravel()
-        b_i = np.asarray(X.sum(axis=0)).ravel()
+        # 1. Step 1: Cross-Purification (CP)
+        print("  Step 1: Cross-Purification (CP)...")
+        b_raw = np.asarray(X.sum(axis=0)).ravel()
+        q_raw = np.asarray(X.sum(axis=1)).ravel()
 
-        u_weight = np.power(q_u + self.eps, -self.gamma)
-        i_weight = np.power(b_i + self.eps, -self.gamma / 2.0)
+        # [경로 A] 원본 아이템 편향으로 유저 정제
+        D_I_raw_inv = sp.diags(np.power(b_raw + self.eps, -self.gamma))
+        q_star = np.asarray(X_sq.dot(D_I_raw_inv).sum(axis=1)).ravel()
 
-        D_U_inv = sp.diags(u_weight)
-        D_I_inv_half = sp.diags(i_weight)
+        # [경로 B] 원본 유저 편향으로 아이템 정제
+        D_U_raw_inv = sp.diags(np.power(q_raw + self.eps, -self.gamma))
+        b_star = np.asarray(X_sq.T.dot(D_U_raw_inv).sum(axis=1)).ravel()
 
-        G_ips_raw = (X.T @ D_U_inv @ X).toarray()          # Raw IPS Gram
+        # 2. Step 2: VST Normalized Gram Matrix
+        print("  Step 2: Computing Purified Gram Matrix (NumPy)...")
+        user_scale = sp.diags(np.power(q_star + self.eps, -self.gamma / 2.0))
+        item_scale = sp.diags(np.power(b_star + self.eps, -self.gamma / 2.0))
 
-        # 2. Direct Model (simple bias imputation) ── DR의 핵심 킥
-        # (user bias + item bias + global mean)
-        global_mean = X.mean()
-        user_bias = np.asarray(X.mean(axis=1)).ravel() - global_mean
-        item_bias = np.asarray(X.mean(axis=0)).ravel() - global_mean
+        # G_tilde = D_I_star @ (X.T @ D_U_star @ X) @ D_I_star
+        # 메모리 효율을 위해 유저 스케일링을 먼저 적용 후 Gram 계산
+        G_U = (X.T @ (user_scale @ X)).toarray()
+        G_tilde = item_scale @ G_U @ item_scale
 
-        # imputation matrix (sparse → dense)
-        # R_hat_ui = user_bias_u + item_bias_i + global_mean
-        R_hat = np.outer(user_bias, np.ones(K)) + \
-                np.outer(np.ones(X.shape[0]), item_bias) + global_mean
-        R_hat = np.clip(R_hat, 0, 1)   # implicit feedback이니 0~1로
-
-        # 3. DR Gram (IPS + correction)
-        # G_dr = G_ips + sum_u w_u (R_hat_u.T @ R_hat_u - (R_hat_u * O_u).T @ (R_hat_u * O_u))
-        obs_mask = (X.toarray() > 0).astype(float)
+        # 3. Step 3: RLAE Solver (CPU)
+        print(f"  Step 3: Solving RLAE (b={self.b}) on CPU...")
+        A = G_tilde.copy()
+        A[np.diag_indices(K)] += self.reg_lambda
         
-        # Weighted model Gram: sum_u w_u R_hat_u.T @ R_hat_u
-        # D_U_inv @ R_hat scales each user's imputation by its weight w_u
-        G_model_raw = R_hat.T @ (D_U_inv @ R_hat)
+        P = np.linalg.inv(A)
+        diag_P = np.diag(P)
         
-        # Weighted imputed-observed Gram: sum_u w_u (R_hat_u * O_u).T @ (R_hat_u * O_u)
-        R_hat_obs = R_hat * obs_mask
-        G_imputed_obs_raw = R_hat_obs.T @ (D_U_inv @ R_hat_obs)
+        # penalty = max(lambda, (1-b)/P_jj)
+        penalty = np.maximum(self.reg_lambda, (1.0 - self.b) / (diag_P + self.eps))
         
-        G_dr_raw = G_ips_raw + G_model_raw - G_imputed_obs_raw
+        # W = I - P @ diag(penalty)
+        W = - (P * penalty.reshape(1, -1))
+        W[np.diag_indices(K)] += 1.0
+
+        # 4. Step 4: DAN Post-normalization
+        gini = gini_coefficient(b_raw)
+        alpha = self.alpha_cfg if self.alpha_cfg is not None else gini
+        print(f"  Step 4: DAN Post-norm (Gini={gini:.4f}, alpha={alpha:.4f})...")
         
-        # symmetric normalization (item-side)
-        G_dr = D_I_inv_half @ G_dr_raw @ D_I_inv_half
+        # W_final = D_I^{(1-alpha)} W D_I^{-(1-alpha)}
+        item_power = np.power(b_raw + self.eps, -(1.0 - alpha))
+        W = W * (1.0 / (item_power + self.eps)).reshape(-1, 1) * item_power.reshape(1, -1)
+        np.fill_diagonal(W, 0.0)
 
-        # (선택) SNIPS-style trace normalization으로 variance 추가 안정화
-        trace_norm = np.trace(G_dr)
-        if trace_norm > 1e-8:
-            G_dr /= trace_norm
-
-        # 4. EASE Solver (기존과 동일)
-        G_torch = torch.tensor(G_dr, dtype=torch.float32, device=self.device)
-        A_mat = G_torch + self.reg_lambda * torch.eye(K, device=self.device)
-        P = torch.linalg.inv(A_mat)
-        P_diag = P.diagonal()
-        W = -P / (P_diag.unsqueeze(0) + self.eps)
-        W.fill_diagonal_(0.0)
-
-        self.weight_matrix = W
+        # 5. Move to Device
+        self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)
         self.train_matrix_scipy = X
-        print("DR Hybrid Causal ASPIRE complete.")
+        print("Causal ASPIRE (CP+DAN+RLAE) fitting complete.")
 
     def forward(self, user_indices):
         users = user_indices.cpu().numpy()

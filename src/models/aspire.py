@@ -27,28 +27,30 @@ class Aspire(BaseModel):
         print("  computing gram matrix (CPU)...")
         G_np = compute_gram_matrix(X, data_loader)
         
-        # ── 2. Move to GPU for fast SNR and Scaling ──────────────────────────
-        G = torch.tensor(G_np, dtype=torch.float32, device=self.device)
-        d = G.diagonal()       # n_i
-        S = G.sum(dim=1)       # S_i
+        # ── 2. Perform SNR and Scaling on CPU ──────────────────────────
+        d = G_np.diagonal()       # n_i
+        S = G_np.sum(axis=1)      # S_i
 
-        log_lambda = 2.0 * torch.log(d + self.eps) - torch.log(S + self.eps)
+        log_lambda = 2.0 * np.log(d + self.eps) - np.log(S + self.eps)
         log_lambda_centered = log_lambda - log_lambda.mean()
-        reliability = torch.exp(log_lambda_centered)
+        reliability = np.exp(log_lambda_centered)
 
-        scale_factor = torch.pow(reliability + self.eps, -self.alpha / 2.0)
-        G_tilde = G * scale_factor.view(-1, 1) * scale_factor.view(1, -1)
+        scale_factor = np.power(reliability + self.eps, -self.alpha / 2.0)
+        G_tilde = G_np * scale_factor[:, np.newaxis] * scale_factor[np.newaxis, :]
 
-        # ── 3. Ridge Regression (GPU Inversion) ─────────────────────────────
-        print(f"  inverting matrix on {self.device}...")
-        A = G_tilde.clone()
-        A.diagonal().add_(self.reg_lambda)
+        # ── 3. Ridge Regression (CPU Inversion) ─────────────────────────────
+        print("  inverting matrix (CPU)...")
+        A_np = G_tilde.copy()
+        A_np[np.diag_indices_from(A_np)] += self.reg_lambda
         
-        P = torch.linalg.inv(A)
-        B = P / (-P.diagonal().view(-1, 1) + self.eps)
-        B.diagonal().zero_()
+        P_np = np.linalg.inv(A_np)
         
-        self.weight_matrix = B
+        # Final weights: B_{ij} = -P_{ij} / P_{jj} (i != j), B_{ii} = 0
+        diag_P = np.diag(P_np)
+        B_np = P_np / (-diag_P[:, np.newaxis] + self.eps)
+        np.fill_diagonal(B_np, 0)
+        
+        self.weight_matrix = torch.tensor(B_np, dtype=torch.float32, device=self.device)
         print("Aspire fitting complete.")
 
     def forward(self, user_indices):

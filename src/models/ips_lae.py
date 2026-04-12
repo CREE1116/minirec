@@ -35,14 +35,18 @@ class IPS_LAE(BaseModel):
         print("  computing gram matrix (CPU)...")
         G_np = compute_gram_matrix(X, data_loader)
         
-        print(f"  inverting matrix on {self.device}...")
-        G = torch.tensor(G_np, dtype=torch.float32, device=self.device)
-        G.diagonal().add_(self.reg_lambda)
+        print("  inverting matrix (CPU)...")
+        # G = G + lambda * I
+        G_np[np.diag_indices_from(G_np)] += self.reg_lambda
         
-        P = torch.linalg.inv(G)
-
-        B = P / (-P.diagonal().view(-1, 1) + 1e-12)
-        B.diagonal().zero_()
+        P_np = np.linalg.inv(G_np)
+        
+        # Final weights: B_{ij} = -P_{ij} / P_{jj} (i != j), B_{ii} = 0
+        diag_P = np.diag(P_np)
+        B_np = P_np / (-diag_P[:, np.newaxis] + 1e-12)
+        np.fill_diagonal(B_np, 0)
+        
+        B = torch.tensor(B_np, dtype=torch.float32, device=self.device)
         
         # Apply propensity weighting on GPU
         inv_p = self._compute_inv_propensity(X)

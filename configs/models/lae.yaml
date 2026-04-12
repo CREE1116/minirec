@@ -1,5 +1,5 @@
 model:
   # LIRA (Linear Item-Item Recommendation Algorithm)
-  model_name: 'LIRA'
+  model_name: "lae"
   reg_lambda: 100.0
-  device: 'auto'
+  device: "auto"

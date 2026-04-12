@@ -1,6 +1,6 @@
 model:
   # EASE (Embarrassingly Shallow Autoencoders)
-  model_name: "drlae"
+  model_name: "rdlae"
   reg_lambda: 500.0 # L2 정규화 계수
   dropout_p: 0.5 # 드랍아웃 비율
   device: "auto"

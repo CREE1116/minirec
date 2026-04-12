@@ -3,141 +3,169 @@ import sys
 import torch
 import numpy as np
 import pandas as pd
-from scipy.stats import skew, kurtosis
+import json
 import matplotlib.pyplot as plt
+from scipy import sparse
+from tqdm import tqdm
 
+# Add root directory to path
 sys.path.append(os.getcwd())
-from src.utils.config import merge_all_configs, load_yaml
-from src.data.loader import DataLoader
-from src.models.base import BaseModel
 
-def compute_metrics(tensor):
-    # Ensure CPU for stats
-    t_np = tensor.detach().cpu().numpy()
-    return {
-        'std': float(np.std(t_np)),
-        'skew': float(skew(t_np)),
-        'kurtosis': float(kurtosis(t_np)),
-        'min': float(np.min(t_np)),
-        'max': float(np.max(t_np))
-    }
+from src.models.ease import EASE
+from src.models.causal_aspire import CausalAspire
+from src.utils.sparse import _GLOBAL_SPARSE_CACHE
 
-def analyze_dataset(dataset_cfg_path):
-    d_name = os.path.basename(dataset_cfg_path).replace('.yaml', '')
-    print(f"\n>>> Analyzing ACE properties for dataset: {d_name}")
-    
-    # Load data
-    cfg = load_yaml(dataset_cfg_path)
-    dl = DataLoader(cfg)
-    
-    # Use BaseModel to get train matrix
-    dummy_model = BaseModel(cfg, dl)
-    X = dummy_model.get_train_matrix(dl).to(dummy_model.device)
-    
-    # G = X^T X
-    G = torch.sparse.mm(X.t(), X.to_dense())
-    
-    eps = 1e-12
-    d = G.diagonal()
-    S = G.sum(dim=1)
-    
-    # 1. ACE Calculation
-    log_ace = 2.0 * torch.log(d + eps) - torch.log(S + eps)
-    ace = torch.exp(log_ace - log_ace.mean())
-    
-    # 2. Psi & Pure b_i (from AspirePure logic)
-    scale = torch.pow(ace + eps, -0.5)
-    G_tilde = G * scale.unsqueeze(1) * scale.unsqueeze(0)
-    
-    d_tilde = G_tilde.diagonal()
-    S_tilde = G_tilde.sum(dim=1)
-    log_psi = 2.0 * torch.log(d_tilde + eps) - torch.log(S_tilde + eps)
-    psi = torch.exp(log_psi - log_psi.mean())
-    
-    b_pure = ace / (psi + eps)
-    b_pure = torch.exp(torch.log(b_pure + eps) - torch.log(b_pure + eps).mean())
+class HarsherSimulation:
+    """Simulation with extreme bias and random interaction noise."""
+    def __init__(self, n_users=1000, n_items=1500, latent_dim=20, noise_ratio=0.03):
+        self.n_users = n_users
+        self.n_items = n_items
+        
+        # 1. Base Truth
+        U = np.random.randn(n_users, latent_dim)
+        V = np.random.randn(n_items, latent_dim)
+        V[0:100] *= 4.0 # High quality gems & stars
+        V[100:150] *= 0.1 # Low quality junk
+        
+        true_scores = U @ V.T
+        self.true_matrix = (true_scores > np.percentile(true_scores, 95)).astype(float)
+        
+        # 2. Extreme MNAR Exposure (Gamma=3.0)
+        item_ranks = np.arange(1, n_items + 1)
+        exposure_prob = 1.0 / np.power(item_ranks, 1.2) # Sharper decay
+        exposure_prob /= exposure_prob.max()
+        # High exposure for stars
+        exposure_prob[50:150] = 0.9 
+        exposure_prob[0:50] = 0.005 # Extremely hidden gems
+        
+        exposure_mask = np.random.rand(n_users, n_items) < exposure_prob[None, :]
+        self.observed_signal = self.true_matrix * exposure_mask
+        
+        # 3. Inject Pure Random Noise (Spam Clicks)
+        # noise_ratio of entries are randomly flipped to 1
+        random_noise = (np.random.rand(n_users, n_items) < noise_ratio).astype(float)
+        self.train_matrix = np.maximum(self.observed_signal, random_noise)
+        
+        self.test_matrix = self.true_matrix * (self.train_matrix == 0)
+        
+        self.groups = {
+            'HiddenGems': list(range(0, 50)),
+            'RealStars': list(range(50, 100)),
+            'FakeStars': list(range(100, 150))
+        }
 
-    # --- Experiment 1: ACE Distribution ---
-    stats_ace = compute_metrics(ace)
-    stats_bpure = compute_metrics(b_pure)
-    
-    # --- Experiment 3: Correlation (ACE vs S_i vs b_pure) ---
-    s_norm = S / (S.mean() + eps)
-    corr_ace_s = torch.corrcoef(torch.stack([ace.cpu(), s_norm.cpu()]))[0, 1].item()
-    corr_ace_bpure = torch.corrcoef(torch.stack([ace.cpu(), b_pure.cpu()]))[0, 1].item()
-    corr_bpure_s = torch.corrcoef(torch.stack([b_pure.cpu(), s_norm.cpu()]))[0, 1].item()
+    def get_loader(self):
+        class MockLoader:
+            def __init__(self, m, u, i):
+                self.n_users, self.n_items = u, i
+                r, c = m.nonzero()
+                self.train_df = pd.DataFrame({'user_id': r, 'item_id': c})
+                self.cache_filename = f"ace_sim_{np.random.randint(1e9)}"
+        return MockLoader(self.train_matrix, self.n_users, self.n_items)
 
-    # --- Experiment 4: Spectrum Analysis ---
-    if G.shape[0] > 3000:
-        indices = torch.randperm(G.shape[0])[:3000]
-        G_sub = G[indices][:, indices]
-        G_tilde_sub = G_tilde[indices][:, indices]
-    else:
-        G_sub = G
-        G_tilde_sub = G_tilde
+def calculate_effective_rank(eigvals):
+    norm_eig = eigvals / (eigvals.sum() + 1e-12)
+    entropy = -np.sum(norm_eig * np.log(norm_eig + 1e-12))
+    return np.exp(entropy)
+
+def run_ace_analysis():
+    print("Starting ACE (Adaptive Causal Ensemble) Robustness Analysis...")
+    base_dir = 'output/analytic/ace_properties_analysis'
+    os.makedirs(base_dir, exist_ok=True)
     
-    print(f"  Computing eigenvalues on CPU...")
-    evals_raw = torch.linalg.eigvalsh(G_sub.cpu())
-    evals_ace = torch.linalg.eigvalsh(G_tilde_sub.cpu())
+    # Sweep noise levels
+    noise_levels = [0.0, 0.02, 0.05, 0.10]
+    alphas = [0.0, 0.5, 1.0, 1.5]
     
-    evals_raw = evals_raw[evals_raw > 1e-7]
-    evals_ace = evals_ace[evals_ace > 1e-7]
-    
-    evals_raw /= evals_raw.max()
-    evals_ace /= evals_ace.max()
-    
-    return {
-        'dataset': d_name,
-        'ace_stats': stats_ace,
-        'bpure_stats': stats_bpure,
-        'corr_ace_s': corr_ace_s,
-        'corr_ace_bpure': corr_ace_bpure,
-        'corr_bpure_s': corr_bpure_s,
-        'evals_raw': evals_raw.numpy(),
-        'evals_ace': evals_ace.numpy()
-    }
+    all_results = []
+
+    for n_lvl in noise_levels:
+        print(f"\nTesting Noise Level: {n_lvl*100}%")
+        sim = HarsherSimulation(noise_ratio=n_lvl)
+        dl = sim.get_loader()
+        
+        for a in alphas:
+            _GLOBAL_SPARSE_CACHE.clear()
+            config = {'model': {'reg_lambda': 50.0, 'alpha': a, 'beta': 0.6}, 'device': 'cpu'}
+            model = CausalAspire(config, dl)
+            model.fit(dl)
+            
+            with torch.no_grad():
+                scores = model.forward(torch.arange(sim.n_users)).numpy()
+            scores[sim.train_matrix > 0] = -1e10
+            
+            # Metrics
+            all_ranks = np.argsort(np.argsort(-scores, axis=1), axis=1)
+            rs_rank = all_ranks[:, sim.groups['RealStars']].mean()
+            fs_rank = all_ranks[:, sim.groups['FakeStars']].mean()
+            hg_rank = all_ranks[:, sim.groups['HiddenGems']].mean()
+            
+            # Disentanglement: Gap between Fake and Real
+            disentangle = fs_rank - rs_rank 
+            
+            # Spectral Info
+            X = sparse.csr_matrix(sim.train_matrix)
+            G = X.T.dot(X).toarray()
+            eigvals = np.sort(np.linalg.eigvalsh(G))[::-1]
+            er = calculate_effective_rank(np.maximum(eigvals, 0))
+            
+            all_results.append({
+                'noise': n_lvl,
+                'alpha': a,
+                'rs_rank': float(rs_rank),
+                'fs_rank': float(fs_rank),
+                'hg_rank': float(hg_rank),
+                'disentangle': float(disentangle),
+                'effective_rank': float(er)
+            })
+
+    df = pd.DataFrame(all_results)
+
+    # --- Plot 1: Disentanglement Score (Noise vs Alpha) ---
+    plt.figure(figsize=(10, 7))
+    for n_lvl in noise_levels:
+        sub = df[df['noise'] == n_lvl]
+        plt.plot(sub['alpha'], sub['disentangle'], marker='o', label=f'Noise {int(n_lvl*100)}%', linewidth=2)
+    plt.title("Disentanglement: How well we separate Real vs Fake Stars", fontsize=14)
+    plt.xlabel("Alpha", fontsize=12)
+    plt.ylabel("Rank Gap (Fake - Real) | Higher is Better", fontsize=12)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.savefig(f"{base_dir}/01_disentanglement_power.png", dpi=200)
+    plt.close()
+
+    # --- Plot 2: Hidden Gem Recovery ---
+    plt.figure(figsize=(10, 7))
+    for n_lvl in noise_levels:
+        sub = df[df['noise'] == n_lvl]
+        plt.plot(sub['alpha'], sub['hg_rank'], marker='s', label=f'Noise {int(n_lvl*100)}%', linewidth=2)
+    plt.gca().invert_yaxis()
+    plt.title("Hidden Gem Recovery under Noise", fontsize=14)
+    plt.xlabel("Alpha", fontsize=12)
+    plt.ylabel("Avg Rank | Higher position is better", fontsize=12)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.savefig(f"{base_dir}/02_hidden_gem_recovery.png", dpi=200)
+    plt.close()
+
+    # --- Plot 3: Information Entropy (Effective Rank) ---
+    plt.figure(figsize=(10, 7))
+    for n_lvl in noise_levels:
+        sub = df[df['noise'] == n_lvl]
+        plt.plot(sub['alpha'], sub['effective_rank'], marker='^', label=f'Noise {int(n_lvl*100)}%', linewidth=2)
+    plt.title("Data Structural Richness (Effective Rank)", fontsize=14)
+    plt.xlabel("Alpha", fontsize=12)
+    plt.ylabel("Effective Rank", fontsize=12)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.savefig(f"{base_dir}/03_structural_richness.png", dpi=200)
+    plt.close()
+
+    # Save JSON
+    with open(f"{base_dir}/ace_properties_summary.json", 'w') as f:
+        json.dump(all_results, f, indent=4)
+        
+    print(f"\n✨ Heavy Noise Analysis complete! Plots saved in: {base_dir}")
 
 if __name__ == "__main__":
-    datasets = [
-        'configs/datasets/ml-100k.yaml',
-        'configs/datasets/ml-1m.yaml',
-        'configs/datasets/steam.yaml'
-    ]
-    
-    results = []
-    for d in datasets:
-        try:
-            results.append(analyze_dataset(d))
-        except Exception as e:
-            print(f"Failed to analyze {d}: {e}")
-    
-    if not results:
-        sys.exit(1)
-
-    print("\n" + "="*50)
-    print("ANALYSIS REPORT")
-    print("="*50)
-    
-    for res in results:
-        print(f"\n[Dataset: {res['dataset']}]")
-        print(f"ACE Stats: {res['ace_stats']}")
-        print(f"Pure-b Stats: {res['bpure_stats']}")
-        print(f"Correlations:")
-        print(f"  corr(ACE, S_i): {res['corr_ace_s']:.4f}")
-        print(f"  corr(ACE, b_pure): {res['corr_ace_bpure']:.4f}")
-        print(f"  corr(b_pure, S_i): {res['corr_bpure_s']:.4f}")
-        
-    plt.figure(figsize=(15, 5))
-    for i, res in enumerate(results):
-        plt.subplot(1, 3, i+1)
-        plt.plot(np.sort(res['evals_raw'])[::-1], label='Raw Gram')
-        plt.plot(np.sort(res['evals_ace'])[::-1], label='ACE Normalized')
-        plt.title(f"Spectrum: {res['dataset']}")
-        plt.yscale('log')
-        plt.grid(True, which='both', linestyle='--', alpha=0.5)
-        plt.legend()
-    
-    os.makedirs('output/analysis', exist_ok=True)
-    plt.tight_layout()
-    plt.savefig('output/analysis/spectrum_comparison.png')
-    print(f"\nPlot saved to output/analysis/spectrum_comparison.png")
+    run_ace_analysis()

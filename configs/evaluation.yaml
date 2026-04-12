@@ -2,7 +2,9 @@
 top_k: [10, 20, 50]
 metrics: [
     "Recall",
+    "uRecall",
     "NDCG",
+    "uNDCG",
     "HitRate",
     "Precision",
     "HeadRecall",

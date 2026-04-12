@@ -25,64 +25,67 @@ datasets = [
 
 # 2. 모델별 HPO 설정 리스트
 experiments = [
-    # {
-    #     'name': 'EASE',
-    #     'model_cfg': 'configs/models/ease.yaml',
-    #     'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 1000, 'n_points': 10, 'scale': 'log'}]
-    # },
+    {
+        'name': 'EASE',
+        'model_cfg': 'configs/models/ease.yaml',
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 100, 'max': 10000, 'n_points': 10, 'scale': 'log'}]
+    },
     {
         'name': 'causal_aspire',
         'model_cfg': 'configs/models/causal_aspire.yaml',
-        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 1000, 'n_points': 10, 'scale': 'log'}]
-    }
-    # {
-    #     'name' : 'ips_lae',
-    #     'model_cfg': 'configs/models/ips_lae.yaml',
-    #     'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 1000, 'n_points': 10, 'scale': 'log'},
-    #                {'name': 'wbeta', 'type': 'float', 'min': 0.1, 'max': 0.9, 'n_points': 9, 'scale': 'linear'}]
-    # },
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 1, 'max': 100, 'n_points': 10, 'scale': 'log'},
+                    # {'name': 'alpha', 'type': 'float', 'min': 0.1, 'max': 1.0, 'n_points': 10, 'scale': 'linear'}
+                   ]
+    },
+        {
+        'name': 'causal_aspire_dropout',
+        'model_cfg': 'configs/models/causal_aspire_dropout.yaml',
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 1, 'max': 100, 'n_points': 10, 'scale': 'log'},
+                    #  {'name': 'alpha', 'type': 'float', 'min': 0.1, 'max': 1.0, 'n_points': 10, 'scale': 'linear'},
+                    {'name': 'dropout_p', 'type': 'float', 'min': 0.1, 'max': 0.9, 'n_points': 9, 'scale': 'linear'}]
+    },
+    {
+        'name' : 'ips_lae',
+        'model_cfg': 'configs/models/ips_lae.yaml',
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 100, 'max': 10000, 'n_points': 10, 'scale': 'log'},
+                   {'name': 'wbeta', 'type': 'float', 'min': 0.1, 'max': 0.9, 'n_points': 9, 'scale': 'linear'}]
+    },
     # {
     #     'name' : 'dlae',
     #     'model_cfg': 'configs/models/dlae.yaml',
+    #     'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 100, 'max': 10000, 'n_points': 10, 'scale': 'log'},
+    #                {'name': 'dropout_p', 'type': 'float', 'min': 0.1, 'max': 0.9, 'n_points': 9, 'scale': 'linear'}]
+    # },
+    {
+        'name' : 'lae',
+        'model_cfg': 'configs/models/lae.yaml',
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 100, 'max': 10000, 'n_points': 10, 'scale': 'log'}]
+    },
+    {
+        'name' : 'aspire_ips',
+        'model_cfg': 'configs/models/aspire_ips.yaml',
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 1000, 'n_points': 10, 'scale': 'log'},
+                   {'name': 'alpha', 'type': 'float', 'min': 0.2, 'max': 2.0, 'n_points': 10, 'scale': 'linear'}]
+    },
+    {
+        'name' : 'rlae',
+        'model_cfg': 'configs/models/RLAE.yaml',
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 100, 'max': 10000, 'n_points': 10, 'scale': 'log'},
+                   {'name': 'b', 'type': 'float', 'min': 0.0, 'max': 1.0, 'n_points': 11, 'scale': 'linear'}]
+    },
+    # {
+    #     'name' : 'rdlae',
+    #     'model_cfg': 'configs/models/rdlae.yaml',
     #     'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 1000, 'n_points': 10, 'scale': 'log'},
     #                {'name': 'dropout_p', 'type': 'float', 'min': 0.1, 'max': 0.9, 'n_points': 9, 'scale': 'linear'}]
     # },
-    # {
-    #     'name' : 'aspire',
-    #     'model_cfg': 'configs/models/aspire.yaml',
-    #     'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 1000, 'n_points': 10, 'scale': 'log'},
-    #                {'name': 'alpha', 'type': 'float', 'min': 0.2, 'max': 2.0, 'n_points': 10, 'scale': 'linear'}]
-    # },
-    # {
-    #     'name' : 'daspire',
-    #     'model_cfg': 'configs/models/daspire.yaml',
-    #     'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 1000, 'n_points': 10, 'scale': 'log'},
-    #                {'name': 'alpha', 'type': 'float', 'min': 0.2, 'max': 2.0, 'n_points': 10, 'scale': 'linear'},
-    #                {'name': 'dropout_p', 'type': 'float', 'min': 0.1, 'max': 0.9, 'n_points': 9, 'scale': 'linear'}]
-    # },
-    # {
-    #     'name' : 'lira',
-    #     'model_cfg': 'configs/models/lira.yaml',
-    #     'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 1000, 'n_points': 10, 'scale': 'log'}]
-    # },
-    # {
-    #     'name' : 'aspire_ips',
-    #     'model_cfg': 'configs/models/aspire_ips.yaml',
-    #     'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 1000, 'n_points': 10, 'scale': 'log'},
-    #                {'name': 'alpha', 'type': 'float', 'min': 0.2, 'max': 2.0, 'n_points': 10, 'scale': 'linear'}]
-    # },
-    # {
-    #     'name' : 'rlae',
-    #     'model_cfg': 'configs/models/RLAE.yaml',
-    #     'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 1000, 'n_points': 10, 'scale': 'log'},
-    #                {'name': 'b', 'type': 'float', 'min': 0.0, 'max': 1.0, 'n_points': 11, 'scale': 'linear'}]
-    # },
-    # {
-    #     'name' : 'drlae',
-    #     'model_cfg': 'configs/models/drlae.yaml',
-    #     'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 1000, 'n_points': 10, 'scale': 'log'},
-    #                {'name': 'dropout_p', 'type': 'float', 'min': 0.1, 'max': 0.9, 'n_points': 9, 'scale': 'linear'}]
-    # },
+    {
+        'name' : 'ease_dan',
+        'model_cfg': 'configs/models/ease_dan.yaml',
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 0.1, 'max': 1000, 'n_points': 11, 'scale': 'log'},
+                   {'name': 'alpha', 'type': 'float', 'min': 0.1, 'max': 1.0, 'n_points': 5, 'scale': 'linear'},
+                   {'name': 'beta', 'type': 'float', 'min': 0.1, 'max': 1.0, 'n_points': 5, 'scale': 'linear'}]
+    }
 ]
 
 hpo_cfg = {
@@ -189,8 +192,15 @@ def generate_global_report():
     print(f"\n{'='*30} GLOBAL REPORT {'='*30}")
     for d_name in df['dataset'].unique():
         df_d = df[df['dataset'] == d_name]
-        p_cols = ['model', 'type', main_metric_mean]
-        p_cols = [c for c in p_cols if c in df_d.columns]
+        
+        # 표시할 컬럼들 (기본 메트릭 + 언바이어스드 메트릭)
+        k = _eval_cfg.get('main_metric_k', 20)
+        display_cols = ['model', 'type', f'NDCG@{k}_mean', f'uNDCG@{k}_mean', f'Recall@{k}_mean', f'uRecall@{k}_mean']
+        
+        # 데이터프레임에 실제 존재하는 컬럼만 필터링
+        p_cols = [c for c in display_cols if c in df_d.columns]
+        if 'model' not in p_cols: p_cols.insert(0, 'model')
+        
         print(f"\n[Dataset: {d_name}]")
         print(df_d[p_cols].to_string(index=False))
     print(f"\n✨ Integrated report updated at '{csv_path}'")

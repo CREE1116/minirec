@@ -22,6 +22,7 @@ from .aspire_ips import AspireIPS
 from .rlae import RLAE, RDLAE
 from .causal_aspire import CausalAspire
 from .causal_aspire_dropout import CausalAspireDropout
+from .causal_aspire_dr import CausalAspireDR
 
 MODEL_REGISTRY = {
     'ease': EASE,
@@ -50,6 +51,7 @@ MODEL_REGISTRY = {
     'rdlae': RDLAE,
     'causal_aspire': CausalAspire,  
     'causal_aspire_dropout': CausalAspireDropout,
+    'causal_aspire_dr': CausalAspireDR,
 
 
 }

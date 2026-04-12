@@ -1,8 +1,3 @@
-import torch
-import numpy as np
-import scipy.sparse as sp
-from .base import BaseModel
-from src.utils.sparse import get_train_matrix_scipy
 
 import torch
 import numpy as np

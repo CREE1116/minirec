@@ -26,16 +26,22 @@ class BaseModel(nn.Module):
         rows = torch.tensor(train_df['user_id'].values, dtype=torch.long)
         cols = torch.tensor(train_df['item_id'].values, dtype=torch.long)
         values = torch.ones(len(rows), dtype=dtype)
+        
+        # GPU Sparse Tensor 생성
         with torch.sparse.check_sparse_tensor_invariants(False):
             mat = torch.sparse_coo_tensor(
                 torch.stack([rows, cols]),
                 values,
                 (self.n_users, self.n_items)
-            )
-        # MPS does not support sparse ops; keep on CPU for MPS and let models move dense results to device
-        if self.device.type == 'cuda':
+            ).coalesce()
+        
+        # MPS에서도 슬라이싱은 동작하므로 VRAM이 허용하면 올립니다.
+        try:
             mat = mat.to(self.device)
-        return mat.coalesce()
+        except Exception:
+            print(f"  [Warning] Failed to move sparse matrix to {self.device}. Keeping on CPU.")
+            
+        return mat
 
     def forward(self, user_indices):
         raise NotImplementedError

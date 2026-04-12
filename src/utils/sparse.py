@@ -32,7 +32,8 @@ def compute_gram_matrix(X, data_loader=None):
     if cache_key in _GLOBAL_SPARSE_CACHE and 'G' in _GLOBAL_SPARSE_CACHE[cache_key]:
         return _GLOBAL_SPARSE_CACHE[cache_key]['G']
     
-    G = X.T.dot(X).toarray()
+    # .astype(np.float32)를 추가하여 확실하게 float32 유지
+    G = X.T.dot(X).toarray().astype(np.float32)
     
     if cache_key not in _GLOBAL_SPARSE_CACHE:
         _GLOBAL_SPARSE_CACHE[cache_key] = {}

@@ -12,7 +12,7 @@ class EASE(BaseModel):
         self.train_matrix_scipy = None
 
     def fit(self, data_loader):
-        print(f"Fitting EASE (lambda={self.reg_lambda}) on {self.device}...")
+        print(f"Fitting EASE (lambda={self.reg_lambda}) on CPU...")
         
         # Use shared utility for efficient sparse matrix loading
         self.train_matrix_scipy = get_train_matrix_scipy(data_loader)
@@ -33,12 +33,16 @@ class EASE(BaseModel):
         np.fill_diagonal(B_np, 0)
         
         self.weight_matrix = torch.tensor(B_np, dtype=torch.float32, device=self.device)
+        
+        # GPU Sparse Tensor 준비 (forward 가속)
+        print("  Preparing GPU Sparse Matrix for fast inference...")
+        self.train_matrix_gpu = self.get_train_matrix(data_loader)
+        
         print("EASE fitting complete.")
 
     def forward(self, user_indices):
-        users = user_indices.cpu().numpy()
-        input_matrix = self.train_matrix_scipy[users].toarray()
-        input_tensor = torch.tensor(input_matrix, dtype=torch.float32, device=self.device)
+        # GPU Sparse Tensor에서 행 선택 후 dense 변환하여 행렬곱 (초고속)
+        input_tensor = torch.index_select(self.train_matrix_gpu, 0, user_indices).to_dense()
         return input_tensor @ self.weight_matrix
 
     def calc_loss(self, batch_data):

@@ -93,13 +93,18 @@ class CausalAspireDR(BaseModel):
 
         # 5. Move to Device
         self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)
-        self.train_matrix_scipy = X
+        
+        # GPU 상주형 Sparse Tensor 미리 준비 (forward 가속 주범 제거)
+        print("  Step 5: Preparing GPU Sparse Matrix for fast inference...")
+        self.train_matrix_gpu = self.get_train_matrix(data_loader)
+        
+        self.train_matrix_scipy = X # (호환성 유지)
         print("Causal ASPIRE (CP+DAN+RLAE) fitting complete.")
 
     def forward(self, user_indices):
-        users = user_indices.cpu().numpy()
-        input_tensor = torch.tensor(self.train_matrix_scipy[users].toarray(), 
-                                    dtype=torch.float32, device=self.device)
+        # 🚀 가속의 핵심: CPU-GPU 전송과 toarray()를 제거
+        # GPU 상의 Sparse Tensor에서 행만 선택 후 dense 변환하여 행렬곱
+        input_tensor = torch.index_select(self.train_matrix_gpu, 0, user_indices).to_dense()
         return input_tensor @ self.weight_matrix
 
     def calc_loss(self, batch_data):

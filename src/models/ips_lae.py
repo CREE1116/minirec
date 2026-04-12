@@ -53,12 +53,11 @@ class IPS_LAE(BaseModel):
         B = B * inv_p.view(1, -1)
         
         self.weight_matrix = B
+        self.train_matrix_gpu = self.get_train_matrix(data_loader)
         print("IPS_LAE fitting complete.")
 
     def forward(self, user_indices):
-        users = user_indices.cpu().numpy()
-        input_matrix = self.train_matrix_scipy[users].toarray()
-        input_tensor = torch.tensor(input_matrix, dtype=torch.float32, device=self.device)
+        input_tensor = torch.index_select(self.train_matrix_gpu, 0, user_indices).to_dense()
         return input_tensor @ self.weight_matrix
 
     def calc_loss(self, batch_data):

@@ -41,12 +41,16 @@ class LAE(BaseModel):
             W_np = np.linalg.solve(A_np, G_np)
 
         self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)
+        
+        # GPU Sparse Tensor 준비 (forward 가속)
+        print("  Preparing GPU Sparse Matrix for fast inference...")
+        self.train_matrix_gpu = self.get_train_matrix(data_loader)
+        
         print("LAE fitting complete.")
 
     def forward(self, user_indices):
-        users = user_indices.cpu().numpy()
-        input_matrix = self.train_matrix_scipy[users].toarray()
-        input_tensor = torch.tensor(input_matrix, dtype=torch.float32, device=self.device)
+        # GPU Sparse Tensor에서 행 선택 후 dense 변환하여 행렬곱 (초고속)
+        input_tensor = torch.index_select(self.train_matrix_gpu, 0, user_indices).to_dense()
         return input_tensor @ self.weight_matrix
 
     def calc_loss(self, batch_data):

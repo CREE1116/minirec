@@ -34,11 +34,11 @@ class CausalAspire(BaseModel):
         # Gram matrix의 기댓값 구조인 X.T @ D_U^{-1} @ X 를 효율적으로 계산
         print("  step 2: computing item-side standardized bias...")
         X_u_purified = D_U_inv_half @ X_sp 
-        
+
         # 아이템별 표준화된 인기도 b_i 추출 (Gram 행렬의 대각 성분)
         # b_i = sum_u (X_ui^2 / q_u^0.5)
         item_bias = np.asarray(X_u_purified.power(2).sum(axis=0)).ravel()
-        
+
         # ── Step 3: Gram Matrix Standardization (The VST Miracle) ──────────
         # 그램 행렬의 각 원소를 표준편차(sqrt(b_i * b_j))로 나누어 SNR 평탄화
         # G_tilde = D_I^{-0.5} @ (X.T @ D_U^{-0.5} @ X) @ D_I^{-0.5}
@@ -56,7 +56,7 @@ class CausalAspire(BaseModel):
         # P = (G_tilde + lambda*I)^{-1}
         G_tilde[np.diag_indices_from(G_tilde)] += self.reg_lambda
         P_np = np.linalg.inv(G_tilde)
-        
+
         # W_{ij} = - P_{ij} / P_{jj} (i != j), W_{ii} = 0
         # EASE의 최적성을 복원하는 해석적 해
         P_diag = np.diag(P_np)
@@ -64,9 +64,9 @@ class CausalAspire(BaseModel):
         np.fill_diagonal(W_np, 0)
 
         self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)
+        self.train_matrix_gpu = self.get_train_matrix(data_loader)
         print("Causal ASPIRE (Standardization) fitting complete.")
 
     def forward(self, user_indices):
-        users = user_indices.cpu().numpy()
-        input_tensor = torch.tensor(self.train_matrix_scipy[users].toarray(), dtype=torch.float32, device=self.device)
+        input_tensor = torch.index_select(self.train_matrix_gpu, 0, user_indices).to_dense()
         return input_tensor @ self.weight_matrix

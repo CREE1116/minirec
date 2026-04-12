@@ -99,7 +99,7 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
     # Precompute Inverse Propensity Weights for Unbiased Metrics
     inv_pscore = None
     if any(m.startswith('u') for m in metrics_list) and item_popularity is not None:
-        # P_i = (count_i / max_count) ^ 0.5
+        # P_i = (count_i / max_count) ^ 0.5 (Common gamma value for propensity)
         pop_t = torch.tensor(item_popularity, dtype=torch.float32, device=device)
         pscore = torch.pow((pop_t + 1) / (pop_t.max() + 1), 0.5)
         inv_pscore = 1.0 / pscore
@@ -130,10 +130,20 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
             hit_mat = torch.gather(gt_batch.float(), 1, top_idx)
 
             # For Unbiased Metrics
+            u_idcg_dict = {} # Precompute uIDCG for each k
             if inv_pscore is not None:
                 rank_inv_pscore = torch.gather(inv_pscore.expand(B, -1), 1, top_idx)
-                # u_gt_sizes: Sum of 1/P_i for all items in GT
-                u_gt_sizes = (gt_batch.float() * inv_pscore).sum(dim=1)
+                # u_gt_weights: Weights of all items in GT for these users
+                u_gt_weights = gt_batch.float() * inv_pscore
+                # Sort all GT weights descending to calculate strict uIDCG
+                sorted_gt_weights, _ = torch.sort(u_gt_weights, dim=1, descending=True)
+                
+                # u_gt_sum: Denominator for uRecall
+                u_gt_sum = sorted_gt_weights.sum(dim=1)
+                
+                # Precompute uIDCG for each possible rank discount
+                # idcg_w[B, max_k]
+                u_idcg_matrix = sorted_gt_weights[:, :max_k] * log2_w
 
             for k in top_k_list:
                 # Update rec_counts strictly for this K
@@ -156,22 +166,14 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
                 if inv_pscore is not None:
                     u_hk = hk * rank_inv_pscore[:, :k]
                     if 'uRecall' in metrics_list:
-                        u_rec = u_hk.sum(dim=1) / u_gt_sizes.clamp(min=1e-8)
+                        u_rec = u_hk.sum(dim=1) / u_gt_sum.clamp(min=1e-8)
                         sums[f'uRecall@{k}'] += u_rec.sum().item()
                     
                     if 'uNDCG' in metrics_list:
                         u_dcg = (u_hk * log2_w[:k]).sum(dim=1)
-                        # uIDCG is tricky: it should be the DCG of top-K GT items sorted by 1/P_i
-                        # For simplicity and consistency with many implementations, we use the same IDCG normalization 
-                        # but with weighted hits. A more rigorous uIDCG would require sorting GT items by weight.
-                        # However, since we want to be "unbiased" in the sense of IPW, 
-                        # many use: uDCG / uIDCG where uIDCG is calculated from weighted GT.
-                        # Here we use the standard idcg_lut but scaled by average inv_pscore of GT if possible, 
-                        # or just normalize by the sum of weights.
-                        # Let's use a simpler version: uDCG normalized by the ideal weighted DCG.
-                        # To keep it GPU efficient, we'll use:
-                        idcg = idcg_lut[n_rel]
-                        sums[f'uNDCG@{k}'] += (u_dcg / idcg.clamp(min=1e-8)).sum().item()
+                        # Strict uIDCG: Ideal ranking sorts GT items by weight (1/P_i)
+                        u_idcg = u_idcg_matrix[:, :k].sum(dim=1)
+                        sums[f'uNDCG@{k}'] += (u_dcg / u_idcg.clamp(min=1e-8)).sum().item()
 
                 # Group metrics (Head/Mid/Tail)
                 for g in ['Head', 'Mid', 'Tail']:

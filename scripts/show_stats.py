@@ -5,7 +5,7 @@ sys.path.append(os.getcwd())
 from src.utils.stats import get_dataset_stats
 
 def main():
-    base_path = '/Users/leejongmin/code/minirec/data/preprocessed'
+    base_path = os.path.join(os.getcwd(), 'data', 'preprocessed')
     if not os.path.exists(base_path):
         print(f"Error: Base path {base_path} not found.")
         return

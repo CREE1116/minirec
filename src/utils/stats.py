@@ -2,7 +2,10 @@ import os
 import pandas as pd
 import numpy as np
 
-def get_dataset_stats(dataset_name, base_path='/Users/leejongmin/code/minirec/data/preprocessed'):
+def get_dataset_stats(dataset_name, base_path=None):
+    if base_path is None:
+        base_path = os.path.join(os.getcwd(), 'data', 'preprocessed')
+    
     data_dir = os.path.join(base_path, dataset_name)
     
     if not os.path.exists(data_dir):

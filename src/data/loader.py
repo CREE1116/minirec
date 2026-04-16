@@ -9,7 +9,9 @@ class DataLoader:
     def __init__(self, config):
         self.config = config
         self.dataset_name = config['dataset_name']
-        self.data_dir = os.path.join('/Users/leejongmin/code/minirec/data/preprocessed', self.dataset_name)
+        # 하드코딩된 절대 경로를 프로젝트 루트 기준 상대 경로로 변경
+        base_preprocessed_path = os.path.join(os.getcwd(), 'data', 'preprocessed')
+        self.data_dir = os.path.join(base_preprocessed_path, self.dataset_name)
         
         # 캐시 경로 설정
         self.cache_dir = config.get('data_cache_path', './data_cache/')

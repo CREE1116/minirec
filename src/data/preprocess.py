@@ -96,7 +96,7 @@ def split_data(df, method='random', train_ratio=0.8, valid_ratio=0.1, seed=42):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, help='Path to dataset yaml config')
-    parser.add_argument('--output_dir', type=str, default='./data/')
+    parser.add_argument('--output_dir', type=str, default='./data/preprocessed', help='Directory to save preprocessed datasets')
     args = parser.parse_args()
 
     if not args.config:

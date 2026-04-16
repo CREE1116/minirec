@@ -50,7 +50,7 @@ class Trainer:
             # use_test_for_hpo가 True이면 test set 결과를 반환
             if self.config.get('use_test_for_hpo', False):
                 return self.evaluate(is_final=True)
-            return self.evaluate(is_final=False)
+            return self.evaluate(is_final=False, all_metrics=True)
 
         # 일반 모드: test set 최종 평가
         return self.evaluate(is_final=True)
@@ -60,7 +60,7 @@ class Trainer:
         lr = float(train_cfg.get('lr', 0.001))
         wd = float(train_cfg.get('weight_decay', 0))
         
-        # Optimizer 설정 (Adam, SGD, AdamW 지원)
+        # Optimizer 설정
         opt_name = train_cfg.get('optimizer', 'Adam').lower()
         if opt_name == 'adam':
             optimizer = optim.Adam(self.model.parameters(), lr=lr, weight_decay=wd)
@@ -69,14 +69,13 @@ class Trainer:
         elif opt_name == 'adamw':
             optimizer = optim.AdamW(self.model.parameters(), lr=lr, weight_decay=wd)
         else:
-            print(f"Unknown optimizer '{opt_name}', defaulting to Adam.")
             optimizer = optim.Adam(self.model.parameters(), lr=lr, weight_decay=wd)
         
-        epochs = train_cfg.get('epochs', 100) # 기본 에폭 상향
+        epochs = train_cfg.get('epochs', 100)
         batch_size = train_cfg.get('batch_size', 1024)
         loader = self.data_loader.get_train_loader(batch_size)
         
-        # Early Stopping 관련 설정
+        # Early Stopping
         patience = train_cfg.get('patience', 10)
         patience_counter = 0
         best_metric, best_state = -1, None
@@ -101,43 +100,49 @@ class Trainer:
                 optimizer.step()
                 total_loss += loss.item()
             
-            # Epoch-wise Validation (use_test=True인 경우 test set 사용)
-            val_metrics = self.evaluate(is_final=use_test)
+            # Epoch-wise Validation (Fast evaluation: only main metric)
+            val_metrics = self.evaluate(is_final=use_test, all_metrics=False)
             val_val = val_metrics.get(full_m_name, 0)
             print(f"Epoch {epoch+1}: Loss {total_loss/len(loader):.4f}, {'Test' if use_test else 'Val'} {full_m_name}: {val_val:.4f}")
             
             if val_val > best_metric:
                 best_metric = val_val
                 best_state = copy.deepcopy(self.model.state_dict())
-                self._best_val_metrics = val_metrics  # HPO 반환용 캐싱
-                patience_counter = 0 # 카운터 초기화
+                
+                # Best epoch일 때 전체 메트릭 계산 및 저장
+                if not use_test:
+                    print("  [Best Model] Calculating full validation metrics...")
+                    self._best_val_metrics = self.evaluate(is_final=False, all_metrics=True)
+                    if not self.hpo_mode:
+                        with open(os.path.join(self.output_path, 'val_metrics.json'), 'w') as f:
+                            json.dump({k: float(v) for k, v in self._best_val_metrics.items()}, f, indent=4)
+                else:
+                    self._best_val_metrics = val_metrics
+
+                patience_counter = 0
             else:
                 patience_counter += 1
                 if patience_counter >= patience:
-                    print(f"Early stopping at epoch {epoch+1} (Best {'Test' if use_test else 'Val'} {full_m_name}: {best_metric:.4f})")
+                    print(f"Early stopping at epoch {epoch+1} (Best {full_m_name}: {best_metric:.4f})")
                     break
         
         if best_state:
             self.model.load_state_dict(best_state)
-            print(f"Loaded Best Model ({'Test' if use_test else 'Val'} {full_m_name}: {best_metric:.4f})")
 
-    def evaluate(self, loader=None, is_final=False):
+    def evaluate(self, loader=None, is_final=False, all_metrics=False):
         self.model.eval()
         eval_cfg = self.config.get('evaluation', {}).copy()
         
         if loader is None:
-            batch_size = eval_cfg.get('batch_size', 2048)
+            batch_size = eval_cfg.get('batch_size', 4096)
             loader = self.data_loader.get_final_loader(batch_size) if is_final else self.data_loader.get_validation_loader(batch_size)
         
-        # [효율화] Validation 모드(is_final=False): 메인 메트릭@K 하나만 계산하여 에폭 당 소요 시간 단축
-        if not is_final:
+        # [효율화] is_final도 아니고 all_metrics도 아니면 메인 메트릭 하나만 계산
+        if not is_final and not all_metrics:
             m_name = eval_cfg.get('main_metric', 'NDCG')
             m_k = eval_cfg.get('main_metric_k', 20)
             eval_cfg['metrics'] = [m_name]
             eval_cfg['top_k'] = [m_k]
-        else:
-            # [자동화] Final 모드: evaluation.yaml에 정의된 모든 메트릭/Top-K 계산 (이미 eval_cfg에 리스트로 로드됨)
-            print(f"Final Evaluation: Calculating all metrics {eval_cfg.get('metrics')} for Top-K {eval_cfg.get('top_k')}...")
             
         metrics = evaluate_metrics(self.model, self.data_loader, eval_cfg, self.device, loader, is_final=is_final)
         

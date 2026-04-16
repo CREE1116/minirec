@@ -1,8 +1,9 @@
 # Global Evaluation Settings
 seed: 42
-top_k: [10, 20, 50]
-batch_size: 4096  # 평가 시 배치 사이즈 상향 (속도 가속)
-metrics: [
+top_k: [10, 20, 50, 100]
+batch_size: 4096 # 평가 시 배치 사이즈 상향 (속도 가속)
+metrics:
+  [
     "Recall",
     "uRecall",
     "NDCG",
@@ -21,14 +22,14 @@ metrics: [
     "HeadCoverage",
     "Novelty",
     "GiniIndex",
-    "PopRatio"
-]
+    "PopRatio",
+  ]
 
 # Metric calculation details
 main_metric: "NDCG"
-main_metric_k: 20
+main_metric_k: 100
 
 # Popularity-based splitting (Interaction Volume Ratios)
-head_ratio: 0.8  # Top items covering 80% of interactions
-mid_ratio: 0.1   # Next items covering 10% of interactions
+head_ratio: 0.8 # Top items covering 80% of interactions
+mid_ratio: 0.1 # Next items covering 10% of interactions
 # tail_ratio: 0.1  # Remaining items (automatically calculated as 1 - head - mid)

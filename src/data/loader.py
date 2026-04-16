@@ -30,7 +30,6 @@ class DataLoader:
         self.test_df = pd.read_csv(os.path.join(self.data_dir, 'test.csv'))
 
         # Preprocessed data is already mapped to IDs 0...N-1
-        # 전체 데이터셋을 아우르는 n_users, n_items 계산
         self.n_users = int(max(self.train_df['user_id'].max(), self.valid_df['user_id'].max(), self.test_df['user_id'].max()) + 1)
         self.n_items = int(max(self.train_df['item_id'].max(), self.valid_df['item_id'].max(), self.test_df['item_id'].max()) + 1)
         
@@ -51,12 +50,11 @@ class DataLoader:
         self._prepare_sparse_tensors()
 
     def _prepare_sparse_tensors(self):
-        """평가 가속화를 위해 희소 텐서를 메모리에 미리 준비"""
-        print(f"[DataLoader] Preparing sparse tensors for {self.dataset_name}...")
-        
+        """메모리 내 희소 텐서 선행 생성 및 경고 해결"""
         def to_sp(df):
-            r = torch.from_numpy(df['user_id'].values).long()
-            c = torch.from_numpy(df['item_id'].values).long()
+            # .copy()를 추가하여 Non-writable NumPy array 경고 해결
+            r = torch.from_numpy(df['user_id'].values.copy()).long()
+            c = torch.from_numpy(df['item_id'].values.copy()).long()
             v = torch.ones(r.size(0), dtype=torch.float32)
             return torch.sparse_coo_tensor(torch.stack([r, c]), v, (self.n_users, self.n_items)).coalesce()
 
@@ -64,6 +62,35 @@ class DataLoader:
         self.sp_train_valid = to_sp(pd.concat([self.train_df, self.valid_df]))
         self.sp_valid_gt = to_sp(self.valid_df)
         self.sp_test_gt = to_sp(self.test_df)
+
+    def get_interaction_graph(self):
+        """LightGCN 등 그래프 모델을 위한 인접 행렬 생성"""
+        import scipy.sparse as sp
+        
+        # Create bipartite adjacency matrix
+        R = sp.csr_matrix((np.ones(len(self.train_df)), (self.train_df['user_id'], self.train_df['item_id'])),
+                          shape=(self.n_users, self.n_items))
+        
+        adj_mat = sp.dok_matrix((self.n_users + self.n_items, self.n_users + self.n_items), dtype=np.float32)
+        adj_mat = adj_mat.tolil()
+        adj_mat[:self.n_users, self.n_users:] = R
+        adj_mat[self.n_users:, :self.n_users] = R.T
+        adj_mat = adj_mat.todok()
+        
+        # Normalize: D^-0.5 A D^-0.5
+        rowsum = np.array(adj_mat.sum(axis=1))
+        d_inv = np.power(rowsum, -0.5).flatten()
+        d_inv[np.isinf(d_inv)] = 0.
+        d_mat = sp.diags(d_inv)
+        
+        norm_adj = d_mat.dot(adj_mat).dot(d_mat)
+        norm_adj = norm_adj.tocoo()
+        
+        # Convert to torch sparse
+        indices = torch.from_numpy(np.vstack((norm_adj.row, norm_adj.col)).astype(np.int64))
+        values = torch.from_numpy(norm_adj.data.astype(np.float32))
+        shape = torch.Size(norm_adj.shape)
+        return torch.sparse_coo_tensor(indices, values, shape).coalesce()
 
     def _save_to_cache(self):
         data = {
@@ -78,7 +105,6 @@ class DataLoader:
             pickle.dump(data, f)
 
     def _load_from_cache(self):
-        print(f"[DataLoader] Cache hit: {self.cache_path}")
         with open(self.cache_path, 'rb') as f:
             data = pickle.load(f)
         for k, v in data.items():
@@ -91,13 +117,13 @@ class DataLoader:
         return PyTorchDataLoader(ds, batch_size=batch_size, shuffle=True, collate_fn=ds.collate_fn)
 
     def get_validation_loader(self, batch_size):
-        ds = TensorDataset(torch.LongTensor(self.valid_df['user_id'].values), 
-                           torch.LongTensor(self.valid_df['item_id'].values))
+        ds = TensorDataset(torch.LongTensor(self.valid_df['user_id'].values.copy()), 
+                           torch.LongTensor(self.valid_df['item_id'].values.copy()))
         return PyTorchDataLoader(ds, batch_size=batch_size, shuffle=False)
 
     def get_final_loader(self, batch_size):
-        ds = TensorDataset(torch.LongTensor(self.test_df['user_id'].values), 
-                           torch.LongTensor(self.test_df['item_id'].values))
+        ds = TensorDataset(torch.LongTensor(self.test_df['user_id'].values.copy()), 
+                           torch.LongTensor(self.test_df['item_id'].values.copy()))
         return PyTorchDataLoader(ds, batch_size=batch_size, shuffle=False)
 
 class RecSysDataset(Dataset):

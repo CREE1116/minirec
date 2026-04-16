@@ -50,12 +50,19 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
         mean_pop = pop_tensor.mean().item()
 
     group_masks = {}
-    needed_groups = [g for g in ['Head', 'Mid', 'Tail'] if any(m.startswith(g) for m in metrics_list) or (g == 'Tail' and 'LongTail' in str(metrics_list))]
+    needed_groups = []
+    if any('Head' in m for m in metrics_list): needed_groups.append('Head')
+    if any('Mid' in m for m in metrics_list): needed_groups.append('Mid')
+    if any('Tail' in m for m in metrics_list) or any('LongTail' in m for m in metrics_list): 
+        needed_groups.append('Tail')
+    
     if item_popularity is not None and needed_groups:
         h_idx, m_idx, t_idx = get_item_split_sets(item_popularity, head_ratio, mid_ratio)
-        for g, idxs in zip(['Head', 'Mid', 'Tail'], [h_idx, m_idx, t_idx]):
+        group_map = {'Head': h_idx, 'Mid': m_idx, 'Tail': t_idx}
+        for g in needed_groups:
             mask = torch.zeros(n_items, dtype=torch.bool, device=device)
-            mask[torch.tensor(idxs, dtype=torch.long, device=device)] = True
+            idxs = group_map[g]
+            if idxs: mask[torch.tensor(idxs, dtype=torch.long, device=device)] = True
             group_masks[g] = mask
 
     inv_pscore = None
@@ -96,7 +103,6 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
             hit_mat = torch.gather(gt_dense_batch.float(), 1, top_idx)
 
             # Unbiased vectorization
-            u_gt_sum = None; u_idcg_matrix = None
             if inv_pscore is not None:
                 batch_gt_weights = gt_dense_batch.float() * inv_pscore.unsqueeze(0)
                 sorted_gt_weights, _ = torch.sort(batch_gt_weights, dim=1, descending=True)
@@ -125,14 +131,17 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
                     mask = group_masks[g]; g_gt = gt_dense_batch & mask
                     g_sz = g_gt.sum(dim=1).float(); v_mask = g_sz > 0; n_v = v_mask.sum().item()
                     if n_v > 0:
-                        h_v = torch.gather(g_gt[v_mask].float(), 1, top_idx[v_mask, :k]).sum(dim=1)
+                        h_v_all = torch.gather(g_gt[v_mask].float(), 1, top_idx[v_mask, :k])
+                        h_sum = h_v_all.sum(dim=1)
+                        s_v = g_sz[v_mask]
+                        
                         tags = [g, 'LongTail'] if g == 'Tail' else [g]
                         for tag in tags:
-                            if f'{tag}HitRate' in metrics_list: sums[f'{tag}HitRate@{k}'] += (h_v > 0).float().sum().item(); counts[f'{tag}HitRate@{k}'] += n_v
-                            if f'{tag}Recall' in metrics_list: sums[f'{tag}Recall@{k}'] += (h_v / g_sz[v_mask]).sum().item(); counts[f'{tag}Recall@{k}'] += n_v
+                            if f'{tag}HitRate' in metrics_list: sums[f'{tag}HitRate@{k}'] += (h_sum > 0).float().sum().item(); counts[f'{tag}HitRate@{k}'] += n_v
+                            if f'{tag}Recall' in metrics_list: sums[f'{tag}Recall@{k}'] += (h_sum / s_v).sum().item(); counts[f'{tag}Recall@{k}'] += n_v
                             if f'{tag}NDCG' in metrics_list:
-                                dcg_v = (torch.gather(g_gt[v_mask].float(), 1, top_idx[v_mask, :k]) * log2_w[:k]).sum(dim=1)
-                                sums[f'{tag}NDCG@{k}'] += (dcg_v / idcg_lut[g_sz[v_mask].clamp(max=k).long()].clamp(min=1e-8)).sum().item(); counts[f'{tag}NDCG@{k}'] += n_v
+                                dcg_v = (h_v_all * log2_w[:k]).sum(dim=1)
+                                sums[f'{tag}NDCG@{k}'] += (dcg_v / idcg_lut[s_v.clamp(max=k).long()].clamp(min=1e-8)).sum().item(); counts[f'{tag}NDCG@{k}'] += n_v
 
                 if 'PopRatio' in metrics_list:
                     sums[f'PopRatio@{k}'] += (pop_tensor[top_idx[:, :k]].mean(dim=1) / mean_pop).sum().item()
@@ -140,12 +149,13 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
 
     final = {}
     for k in top_k_list:
+        # Denominator is the number of users actually evaluated
         n = counts[k]
         for m in ['HitRate', 'Recall', 'uRecall', 'Precision', 'NDCG', 'uNDCG', 'PopRatio']:
             key = f'{m}@{k}'; final[key] = sums[key] / n if n else 0.0
         for g in ['Head', 'Mid', 'Tail', 'LongTail']:
             for m in ['HitRate', 'Recall', 'NDCG']:
-                key = f'{g}{m}@{k}'; final[key] = sums[key] / counts.get(key, 1)
+                key = f'{g}{m}@{k}'; final[key] = sums[key] / (counts.get(key, 0) + 1e-12)
     return final, rec_counts_dict, group_masks
 
 
@@ -154,8 +164,15 @@ def evaluate_metrics(model, data_loader, eval_config, device, test_loader, is_fi
     test_gt_sp = data_loader.sp_test_gt if is_final else data_loader.sp_valid_gt
 
     final_res, rec_counts, g_masks = _evaluate_full(
-        model, test_loader, top_k_list=eval_config.get('top_k', [10]), metrics_list=eval_config.get('metrics', []), 
-        device=device, user_history_sp=history_sp.to(device), test_gt_sp=test_gt_sp.to(device), item_popularity=data_loader.item_popularity
+        model, test_loader, 
+        top_k_list=eval_config.get('top_k', [10]), 
+        metrics_list=eval_config.get('metrics', []), 
+        device=device, 
+        user_history_sp=history_sp.to(device), 
+        test_gt_sp=test_gt_sp.to(device), 
+        item_popularity=data_loader.item_popularity,
+        head_ratio=eval_config.get('head_ratio', 0.8),
+        mid_ratio=eval_config.get('mid_ratio', 0.1)
     )
 
     if data_loader.item_popularity is not None:
@@ -167,6 +184,8 @@ def evaluate_metrics(model, data_loader, eval_config, device, test_loader, is_fi
             if 'Novelty' in eval_config['metrics']: final_res[f'Novelty@{k}'] = get_novelty_gpu(rc, pop_t, data_loader.n_users)
             for g in ['Head', 'Mid', 'Tail', 'LongTail']:
                 if f'{g}Coverage' in eval_config['metrics']:
-                    mask = g_masks.get('Tail' if g == 'LongTail' else g)
+                    # Use Tail mask for LongTail
+                    mask_key = 'Tail' if g == 'LongTail' else g
+                    mask = g_masks.get(mask_key)
                     if mask is not None: final_res[f'{g}Coverage@{k}'] = (rc[mask] > 0).float().mean().item()
     return final_res

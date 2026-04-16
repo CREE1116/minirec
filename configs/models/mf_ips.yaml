@@ -1,0 +1,18 @@
+model_name: "mf_ips"
+
+model:
+  name: "mf_ips"
+  embed_dim: 64
+  reg_weight: 0.001
+  gamma: 0.5           # Propensity exponent (common values: 0.5 ~ 1.0)
+
+train:
+  epochs: 100
+  batch_size: 4096
+  lr: 0.001
+  weight_decay: 1e-5
+  optimizer: "Adam"
+  patience: 10
+  loss_type: "pointwise"
+  num_negatives: 1
+  negative_sampling_strategy: "uniform"

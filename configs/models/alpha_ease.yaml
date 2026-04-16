@@ -1,6 +1,0 @@
-model:
-  # Alpha-EASE: Self-to-Neighbor Energy Ratio Constraint
-  model_name: 'alpha_ease'
-  reg_lambda: 100.0  # L2 정규화 계수
-  alpha: 0.5        # 자기:이웃 에너지 비율 (0: EASE)
-  device: 'auto'

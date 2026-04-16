@@ -54,12 +54,12 @@ def edge_homophily(X: sparse.csr_matrix,
 class EASE_DAN(BaseModel):
     """
     EASE with Data-Adaptive Normalization (DAN)
-    CPU-based solver for stability and VRAM efficiency.
+    Pure EASE structure with constant regularization.
     """
 
     def __init__(self, config, data_loader):
         super().__init__(config, data_loader)
-        self.reg_lambda        = config['model'].get('reg_lambda', 100.0)
+        self.reg_p             = config['model'].get('reg_p', 100.0)
         self.alpha_config      = config['model'].get('alpha', None)
         self.beta_config       = config['model'].get('beta',  None)
         self.volume_weight_exp = config['model'].get('volume_weight_exp', 1.5)
@@ -69,7 +69,7 @@ class EASE_DAN(BaseModel):
         self.train_matrix_scipy = None
 
     def fit(self, data_loader):
-        print(f"Fitting EASE_DAN (lambda={self.reg_lambda}) on CPU...")
+        print(f"Fitting EASE_DAN (reg_p={self.reg_p}) on CPU...")
         X = get_train_matrix_scipy(data_loader)
         self.train_matrix_scipy = X
 
@@ -88,31 +88,29 @@ class EASE_DAN(BaseModel):
             
         print(f"  Gini={gini:.4f}, α={alpha:.4f}, β={beta:.4f}")
 
-        # 2. 유저 정규화 (X_tilde = D_U^{-β} X) 및 Gram 계산
+        # 2. 유저 정규화 (X_tilde = D_U^{-β} X)
         print("  computing gram matrix with user normalization (CPU)...")
-        # Sparse multiply is efficient
         X_T_weighted = X.multiply(np.power(user_counts + self.eps, -beta).reshape(-1, 1)).T
-        G_dan = X_T_weighted.dot(X).toarray().astype(np.float32)
+        G = X_T_weighted.dot(X).toarray().astype(np.float32)
 
-        # 3. CPU Solver (NumPy)
-        A = G_dan.copy()
-        A[np.diag_indices(self.n_items)] += self.reg_lambda
+        # 3. 상수 규제 (Constant Lambda)
+        G[np.diag_indices(self.n_items)] += self.reg_p
         
+        # 4. EASE Closed-form Solver (I - P/diag(P))
         print("  inverting matrix on CPU...")
-        P = np.linalg.inv(A)
+        P = np.linalg.inv(G)
         diag_P = np.diag(P)
         
-        # W = -P / P_jj
-        W = P / (-diag_P.reshape(-1, 1) + self.eps)
+        # W = -P / P_jj (off-diagonal), 0 (diagonal)
+        W = -P / (diag_P.reshape(1, -1) + self.eps)
         np.fill_diagonal(W, 0)
         
-        # 4. 아이템 정규화 후처리
-        # W_final = D_I^{(1-α)} W D_I^{-(1-α)}
-        item_power = np.power(item_counts + self.eps, -(1.0 - alpha))
+        # 5. 아이템 정규화 (공식 버전 alpha 반영)
+        item_power = np.power(item_counts + self.eps, -alpha)
         W = W * (1.0 / (item_power + self.eps)).reshape(-1, 1) * item_power.reshape(1, -1)
         np.fill_diagonal(W, 0)
 
-        # 5. Move results to Device for Forward
+        # 6. Move results to Device for Forward
         self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)
         self.train_matrix_gpu = self.get_train_matrix(data_loader)
         print("EASE_DAN fitting complete.")
@@ -130,12 +128,12 @@ class EASE_DAN(BaseModel):
 class DLAE_DAN(BaseModel):
     """
     DLAE with Data-Adaptive Normalization (DAN)
-    CPU-based solver for stability and VRAM efficiency.
+    Full DLAE structure with adaptive dropout-based lambda.
     """
 
     def __init__(self, config, data_loader):
         super().__init__(config, data_loader)
-        self.reg_lambda        = config['model'].get('reg_lambda', 100.0)
+        self.reg_p             = config['model'].get('reg_p', 100.0)
         self.dropout_p         = config['model'].get('dropout_p', 0.5)
         self.alpha_config      = config['model'].get('alpha', None)
         self.beta_config       = config['model'].get('beta',  None)
@@ -146,7 +144,7 @@ class DLAE_DAN(BaseModel):
         self.train_matrix_scipy = None
 
     def fit(self, data_loader):
-        print(f"Fitting DLAE_DAN (lambda={self.reg_lambda}, p={self.dropout_p}) on CPU...")
+        print(f"Fitting DLAE_DAN (reg_p={self.reg_p}, p={self.dropout_p}) on CPU...")
         X = get_train_matrix_scipy(data_loader)
         self.train_matrix_scipy = X
 
@@ -169,20 +167,19 @@ class DLAE_DAN(BaseModel):
         X_T_weighted = X.multiply(np.power(user_counts + self.eps, -beta).reshape(-1, 1)).T
         G_dan = X_T_weighted.dot(X).toarray().astype(np.float32)
 
-        # 2. DLAE Dropout 규제 (CPU Solver)
-        # lmbda_eff = reg_lambda + (p/(1-p)) * item_counts
+        # 2. DLAE Dropout 규제 (Adaptive Lambda)
         p_val = min(self.dropout_p, 0.99)
-        w_dropout = (p_val / (1.0 - p_val)) * item_counts
+        lmbda_eff = self.reg_p + (p_val / (1.0 - p_val + self.eps)) * item_counts
         
         A = G_dan.copy()
-        A[np.diag_indices(self.n_items)] += (w_dropout + self.reg_lambda)
+        A[np.diag_indices(self.n_items)] += lmbda_eff
         
         print("  solving linear system on CPU...")
-        # W = (G_dan + diag(w_dropout + lambda))^{-1} G_dan
+        # DLAE standard solver: W = (G + L)^{-1} G
         W = np.linalg.solve(A, G_dan)
         
-        # 3. 아이템 정규화 후처리
-        item_power = np.power(item_counts + self.eps, -(1.0 - alpha))
+        # 3. 아이템 정규화 후처리 (공식 버전 alpha 반영)
+        item_power = np.power(item_counts + self.eps, -alpha)
         W = W * (1.0 / (item_power + self.eps)).reshape(-1, 1) * item_power.reshape(1, -1)
         np.fill_diagonal(W, 0)
 

@@ -1,0 +1,6 @@
+model_name: "co_occurrence"
+
+model:
+  name: "co_occurrence"
+
+# No specific hyperparameters for simple co-occurrence

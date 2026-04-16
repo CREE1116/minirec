@@ -12,30 +12,30 @@ from src.utils.seed import set_seed
 from src.utils.config import merge_all_configs, load_yaml
 
 class BayesianOptimizer:
-    def __init__(self, run_func, dataset_cfg, model_cfg, hpo_cfg):
+    def __init__(self, run_func, dataset_name, model_cfg, hpo_cfg):
         self.run_func = run_func
-        self.dataset_cfg = load_yaml(dataset_cfg) if isinstance(dataset_cfg, str) else dataset_cfg
+        self.dataset_name = dataset_name
         self.model_cfg = load_yaml(model_cfg) if isinstance(model_cfg, str) else model_cfg
         
         self.hpo_cfg = hpo_cfg
         self.maximize = hpo_cfg.get('direction', 'max') == 'max'
         self.use_test_for_hpo = hpo_cfg.get('use_test_for_hpo', False)
 
+        # HPO trials seeds (for averaging results per trial)
         if 'seeds' in hpo_cfg:
             self.seeds = hpo_cfg['seeds']
         else:
-            n_seeds = hpo_cfg.get('n_seeds', 3)
+            n_seeds = hpo_cfg.get('n_seeds', 1) # Default to 1 as requested "rigid"
             self.seeds = [42 + i for i in range(n_seeds)]
 
         self.patience = hpo_cfg.get('patience', 20)
         self.params_list = hpo_cfg.get('params', [])
         self.mode = hpo_cfg.get('mode', 'bayesian').lower()
 
-        # HPO objective는 항상 evaluation config의 main_metric을 사용
-        _eval_cfg = merge_all_configs(self.dataset_cfg, self.model_cfg).get('evaluation', {})
-        self.metric = f"{_eval_cfg.get('main_metric', 'NDCG')}@{_eval_cfg.get('main_metric_k', 20)}"
+        # Load evaluation config for metric and seeds
+        eval_cfg = load_yaml('configs/evaluation.yaml')
+        self.metric = f"{eval_cfg.get('main_metric', 'NDCG')}@{eval_cfg.get('main_metric_k', 20)}"
         
-        self.dataset_name = self.dataset_cfg.get('dataset_name', 'unknown_data').lower()
         m_name = self.model_cfg.get('model_name')
         if not m_name and 'model' in self.model_cfg:
             m_name = self.model_cfg['model'].get('name', self.model_cfg['model'].get('model_name', 'unknown_model'))
@@ -48,13 +48,11 @@ class BayesianOptimizer:
         self._max_k = None
 
     def get_search_space(self):
-        """Grid Search를 위한 search_space 생성 (자동 범위 분할 지원)"""
         search_space = {}
         for p_def in self.params_list:
             name = p_def['name']
             p_type = p_def.get('type', 'float')
             
-            # 1. 자동 범위 분할 (min, max, n_points 설정이 있는 경우)
             if 'min' in p_def and 'max' in p_def and 'n_points' in p_def:
                 low = float(p_def['min'])
                 high = float(p_def['max'])
@@ -62,34 +60,27 @@ class BayesianOptimizer:
                 scale = p_def.get('scale', 'linear').lower()
                 
                 if scale == 'log':
-                    # 로그 스케일 분할 (0이 포함되지 않도록 주의)
                     values = np.logspace(np.log10(low), np.log10(high), num=n).tolist()
                 else:
-                    # 선형 스케일 분할
                     values = np.linspace(low, high, num=n).tolist()
                 
-                # int 타입인 경우 반올림 및 중복 제거
                 if p_type == 'int':
                     values = sorted(list(set([int(round(v)) for v in values])))
                 
                 search_space[name] = values
                 continue
 
-            # 2. 기존 수동 범위 설정 (range)
             p_range = p_def.get('range')
             if p_type == 'categorical':
                 choices = p_range
-                if isinstance(choices, str):
-                    choices = choices.split()
+                if isinstance(choices, str): choices = choices.split()
                 search_space[name] = choices
             elif p_type == 'int':
-                # "1 10" -> range(1, 11)
                 parts = p_range.split()
                 if len(parts) == 2:
                     low, high = map(int, parts)
                     search_space[name] = list(range(low, high + 1))
                 else:
-                    # "1 2 5 10" -> [1, 2, 5, 10]
                     search_space[name] = [int(x) for x in parts]
             elif p_type == 'float':
                 points = p_range.split()
@@ -100,19 +91,15 @@ class BayesianOptimizer:
         model_cfg = copy.deepcopy(self.model_cfg)
 
         if self.mode == 'grid':
-            # Grid mode: search_space에 정의된 값만 사용하도록 강제
             search_space = self.get_search_space()
             for name, choices in search_space.items():
                 val = trial.suggest_categorical(name, choices)
-                
                 target_path = name if '.' in name else f"model.{name}"
                 keys = target_path.split('.')
                 d = model_cfg
-                for k in keys[:-1]:
-                    d = d.setdefault(k, {})
+                for k in keys[:-1]: d = d.setdefault(k, {})
                 d[keys[-1]] = val
         else:
-            # Bayesian mode
             for p_def in self.params_list:
                 name = p_def['name']
                 p_type = p_def.get('type', 'float')
@@ -139,15 +126,8 @@ class BayesianOptimizer:
                 for k in keys[:-1]: d = d.setdefault(k, {})
                 d[keys[-1]] = val
         
-        # [중요] 원본 설정을 그대로 복사하여 데이터 유실 방지
-        iter_dataset_cfg = copy.deepcopy(self.dataset_cfg)
-        if isinstance(iter_dataset_cfg, dict):
-            iter_dataset_cfg['seed'] = current_seed
-        
-        set_seed(current_seed)
-        
-        # run_func internally calls merge_all_configs
-        metrics = self.run_func(iter_dataset_cfg, model_cfg, hpo_mode=True, use_test_for_hpo=self.use_test_for_hpo)
+        # Seed is handled inside run_func (which gets it from evaluation.yaml or passed manually)
+        metrics = self.run_func(self.dataset_name, model_cfg, hpo_mode=True, use_test_for_hpo=self.use_test_for_hpo)
         val = metrics.get(self.metric)
         if val is None:
             for k, v in metrics.items():
@@ -159,8 +139,7 @@ class BayesianOptimizer:
     def get_max_k(self):
         if self._max_k is None:
             from src.data.loader import DataLoader
-            temp_config = merge_all_configs(self.dataset_cfg, self.model_cfg)
-            temp_dl = DataLoader(temp_config)
+            temp_dl = DataLoader({'dataset_name': self.dataset_name})
             data_full_rank = min(temp_dl.n_users, temp_dl.n_items) - 1
             self._max_k = min(data_full_rank, 2000)
         return self._max_k
@@ -176,6 +155,9 @@ class BayesianOptimizer:
         all_seed_results = []
         all_best_params = []
         
+        # 데이터셋이 바뀔 때마다 max_k를 리셋하기 위해 search 시작 시 초기화
+        self._max_k = None
+        
         for seed in self.seeds:
             print(f"\n>>> Starting HPO ({self.mode.upper()}) for Seed: {seed}")
             seed_dir = os.path.join(self.hpo_root, f"seed_{seed}")
@@ -184,7 +166,7 @@ class BayesianOptimizer:
             if self.mode == 'grid':
                 search_space = self.get_search_space()
                 sampler = optuna.samplers.GridSampler(search_space)
-                actual_n_trials = None # GridSampler는 모든 조합 완료 시 자동 중단
+                actual_n_trials = None
                 print(f"[Grid Mode] Search Space: {search_space}")
             else:
                 sampler = optuna.samplers.TPESampler(seed=seed)
@@ -192,23 +174,7 @@ class BayesianOptimizer:
 
             study = optuna.create_study(direction='maximize' if self.maximize else 'minimize', sampler=sampler)
             
-            # Early Stopping Callback (Grid 모드에서는 미사용)
-            class EarlyStoppingCallback:
-                def __init__(self, patience, maximize, mode):
-                    self.patience, self.maximize, self.mode = patience, maximize, mode
-                    self.best_score = -np.inf if maximize else np.inf
-                    self.count = 0
-                def __call__(self, study, trial):
-                    if self.mode == 'grid': return
-                    if trial.state == optuna.trial.TrialState.COMPLETE:
-                        is_better = trial.value > self.best_score if self.maximize else trial.value < self.best_score
-                        if is_better: self.best_score, self.count = trial.value, 0
-                        else:
-                            self.count += 1
-                            if self.count >= self.patience: study.stop()
-
-            study.optimize(lambda t: self.objective(t, seed), n_trials=actual_n_trials, 
-                           callbacks=[EarlyStoppingCallback(self.patience, self.maximize, self.mode)])
+            study.optimize(lambda t: self.objective(t, seed), n_trials=actual_n_trials)
             
             self.save_results(study, seed_dir)
             best_params = study.best_params
@@ -226,11 +192,7 @@ class BayesianOptimizer:
                 for k in keys[:-1]: d = d.setdefault(k, {})
                 d[keys[-1]] = val
             
-            best_dataset_cfg = copy.deepcopy(self.dataset_cfg)
-            best_dataset_cfg['seed'] = seed
-            set_seed(seed)
-            
-            test_metrics = self.run_func(best_dataset_cfg, best_model_cfg, 
+            test_metrics = self.run_func(self.dataset_name, best_model_cfg, 
                                         output_path=os.path.join(seed_dir, 'best_test_run'),
                                         hpo_mode=False)
             all_seed_results.append(test_metrics)

@@ -2,95 +2,60 @@ import torch
 import numpy as np
 import scipy.sparse as sp
 from .base import BaseModel
+from src.utils.sparse import get_train_matrix_scipy
 from src.utils.svd import get_svd_cache
 
 
 class GF_CF(BaseModel):
-    """
-    How Powerful is Graph Convolution for Recommendation? (GF-CF)
-    CIKM 2021 - Shen et al.
-
-    논문 핵심 수식 (Eq. 8):
-        s_u = r̃_u  (G + α · V_k Vₖᵀ)
-
-    구성:
-      · R̃ = D_U^{-0.5} R D_I^{-0.5}   (symmetric normalization)
-      · G  = R̃ᵀ R̃                      (linear LPF, item × item)
-      · V_k = top-k right singular vectors of R̃  (ideal LPF)
-      · W = G + α · V_k Vₖᵀ            (combined weight matrix)
-      · 예측: r̃_u @ W  (정규화된 user 행을 graph signal로 사용)
-
-    [기존 코드 vs 논문]
-      - 기존: forward에서 raw R 사용  →  수정: 정규화된 R̃ 사용
-        (논문은 r̃_u를 graph signal로 정의)
-    """
-
     def __init__(self, config, data_loader):
         super().__init__(config, data_loader)
         self.k     = config['model'].get('k',     256)
         self.alpha = config['model'].get('alpha', 0.3)
+        self.eps   = 1e-12
 
-    # ------------------------------------------------------------------
     def fit(self, data_loader):
-        print(f"Fitting GF-CF  k={self.k}  alpha={self.alpha}")
+        print(f"Fitting GF-CF (k={self.k}, alpha={self.alpha})...")
 
-        train_df       = data_loader.train_df
-        n_users, n_items = data_loader.n_users, data_loader.n_items
+        X_sp = get_train_matrix_scipy(data_loader) # (U, I) sparse
 
-        # ── Raw interaction matrix (sparse) ──────────────────────────
-        R_sp = sp.csr_matrix(
-            (np.ones(len(train_df)),
-             (train_df['user_id'], train_df['item_id'])),
-            shape=(n_users, n_items),
-            dtype=np.float32,
-        )
+        # ── 1. Symmetric normalization components ──
+        rowsum = np.asarray(X_sp.sum(axis=1)).ravel() + self.eps
+        colsum = np.asarray(X_sp.sum(axis=0)).ravel() + self.eps
+        
+        d_u = np.power(rowsum, -0.5)
+        d_i = np.power(colsum, -0.5)
+        
+        # ── 2. Linear LPF: G = R_tilde^T R_tilde ──
+        # G = D_I^{-0.5} X^T D_U^{-1} X D_I^{-0.5}
+        print("  Computing linear filter G...")
+        X_u_scaled = sp.diags(1.0 / rowsum) @ X_sp
+        G_sp = X_sp.T @ X_u_scaled # (I, I) sparse
+        
+        # Apply item-side scaling to G
+        D_I_inv_half = sp.diags(d_i)
+        G_sp = D_I_inv_half @ G_sp @ D_I_inv_half
+        G = G_sp.toarray() # (I, I) dense
 
-        # ── Symmetric normalization: R̃ = D_U^{-0.5} R D_I^{-0.5} ───
-        rowsum = np.array(R_sp.sum(axis=1)).flatten()
-        colsum = np.array(R_sp.sum(axis=0)).flatten()
-        d_u    = np.power(rowsum + 1e-12, -0.5)   # (U,)
-        d_i    = np.power(colsum + 1e-12, -0.5)   # (I,)
-        R_tilde_sp = sp.diags(d_u) @ R_sp @ sp.diags(d_i)  # (U, I)
+        # ── 3. Ideal LPF: V_k V_k^T ──
+        print("  Computing ideal filter (SVD)...")
+        R_tilde_sp = sp.diags(d_u) @ X_sp @ D_I_inv_half
+        svd_res = get_svd_cache(data_loader, k_max=self.k, matrix=R_tilde_sp, cache_id="normalized")
+        V = svd_res['vt'].T # (I, k)
+        S_ideal = V @ V.T # (I, I)
 
-        # ── Linear LPF : G = R̃ᵀ R̃  (item × item) ───────────────────
-        R_tilde_torch = self._to_torch_sparse(R_tilde_sp).to(self.device)
-        G = torch.sparse.mm(                          # (I, I)
-            R_tilde_torch.t(),
-            R_tilde_torch.to_dense(),
-        )
+        # ── 4. Combined Weight Matrix ──
+        # s_u = d_u[u] * r_u @ [D_I^{-0.5} @ (G + alpha * S_ideal)]
+        W = d_i.reshape(-1, 1) * (G + self.alpha * S_ideal)
+        
+        self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)
+        self.user_scaling = torch.tensor(d_u, dtype=torch.float32, device=self.device)
+        self.train_matrix_gpu = self.get_train_matrix(data_loader)
+        print("GF-CF fitting complete.")
 
-        # ── Ideal LPF : V_k Vₖᵀ  (top-k right singular vectors of R̃)
-        #    논문: V_k ∈ R^{I × k},  ideal LPF matrix = V_k Vₖᵀ  (I × I)
-        svd_res  = get_svd_cache(
-            data_loader, k_max=self.k,
-            matrix=R_tilde_sp, cache_id="normalized",
-        )
-        V        = torch.from_numpy(svd_res['vt'].T).to(self.device)  # (I, k)
-        S_global = V @ V.t()                                          # (I, I)
-
-        # ── Combined weight matrix: W = G + α · S_global ─────────────
-        self.weight_matrix = G + self.alpha * S_global                # (I, I)
-
-        # ── 정규화된 R̃ 저장 (forward에서 graph signal로 사용) ─────────
-        #    논문: s_u = r̃_u @ W  (raw r_u 가 아님)
-        self.R_tilde_dense = torch.from_numpy(
-            R_tilde_sp.toarray()
-        ).to(self.device)                                              # (U, I)
-
-    # ------------------------------------------------------------------
-    def _to_torch_sparse(self, sp_mat):
-        sp_mat  = sp_mat.tocoo()
-        indices = torch.from_numpy(
-            np.vstack((sp_mat.row, sp_mat.col)).astype(np.int64)
-        )
-        values = torch.from_numpy(sp_mat.data)
-        shape  = torch.Size(sp_mat.shape)
-        return torch.sparse_coo_tensor(indices, values, shape).coalesce()
-
-    # ------------------------------------------------------------------
     def forward(self, user_indices):
-        # s_u = r̃_u @ W   (논문 Eq. 8)
-        return self.R_tilde_dense[user_indices] @ self.weight_matrix
+        u_scale = self.user_scaling[user_indices].unsqueeze(1)
+        r_u = torch.index_select(self.train_matrix_gpu, 0, user_indices).to_dense()
+        return u_scale * (r_u @ self.weight_matrix)
 
     def calc_loss(self, batch_data):
         return (torch.tensor(0.0, device=self.device),), None

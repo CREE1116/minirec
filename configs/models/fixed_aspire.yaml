@@ -1,0 +1,3 @@
+model:
+  model_name: "fixed_aspire"
+  reg_lambda: 100.0

@@ -1,0 +1,6 @@
+model_name: "pmi_lae"
+
+model:
+  name: "pmi_lae"
+  alpha: 1.0        # PMI exponent
+  reg_lambda: 10.0   # LAE regularization

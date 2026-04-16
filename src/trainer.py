@@ -123,11 +123,11 @@ class Trainer:
 
     def evaluate(self, loader=None, is_final=False):
         self.model.eval()
-        if loader is None:
-            batch_size = 2048
-            loader = self.data_loader.get_final_loader(batch_size) if is_final else self.data_loader.get_validation_loader(batch_size)
-        
         eval_cfg = self.config.get('evaluation', {}).copy()
+        
+        if loader is None:
+            batch_size = eval_cfg.get('batch_size', 2048)
+            loader = self.data_loader.get_final_loader(batch_size) if is_final else self.data_loader.get_validation_loader(batch_size)
         
         # [효율화] Validation 모드(is_final=False): 메인 메트릭@K 하나만 계산하여 에폭 당 소요 시간 단축
         if not is_final:

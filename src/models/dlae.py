@@ -20,7 +20,7 @@ class DLAE(BaseModel):
         self.train_matrix_scipy = X
 
         print("  computing gram matrix (CPU)...")
-        G_np = compute_gram_matrix(X)
+        G_np = compute_gram_matrix(X, data_loader)
         
         # Perform calculations on CPU to avoid VRAM issues
         p = min(self.dropout_p, 0.99)

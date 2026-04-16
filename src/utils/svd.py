@@ -11,7 +11,8 @@ def get_svd_cache(data_loader, k_max=None, matrix=None, cache_id="raw"):
     matrix: SVD를 수행할 행렬 (None이면 data_loader에서 raw matrix 생성)
     cache_id: 캐시 식별자 (예: "raw", "normalized")
     """
-    cache_dir = data_loader.data_cache_path
+    cache_dir = getattr(data_loader, 'cache_dir', './data_cache/')
+    dataset_name = getattr(data_loader, 'dataset_name', 'default')
     
     if matrix is None:
         train_df = data_loader.train_df
@@ -22,19 +23,18 @@ def get_svd_cache(data_loader, k_max=None, matrix=None, cache_id="raw"):
     full_rank = min(matrix.shape) - 1
     target_k = full_rank if k_max is None else min(k_max, full_rank)
     
-    base_name = getattr(data_loader, 'cache_filename', 'data').replace('.pkl', '')
     k_label = f"full{target_k}" if k_max is None else f"k{target_k}"
-    svd_cache_path = os.path.join(cache_dir, f"svd_{base_name}_{cache_id}_{k_label}.pkl")
+    svd_cache_path = os.path.join(cache_dir, f"svd_{dataset_name}_{cache_id}_{k_label}.pkl")
 
     if os.path.exists(svd_cache_path):
-        print(f"[SVD Cache] Loading cached {cache_id} SVD ({k_label})...")
+        print(f"[SVD Cache] Loading cached {cache_id} SVD ({k_label}) for {dataset_name}...")
         try:
             with open(svd_cache_path, 'rb') as f:
                 return pickle.load(f)
         except Exception as e:
             print(f"[SVD Cache] Failed to load cache: {e}. Recomputing...")
 
-    print(f"[SVD Cache] Computing {cache_id} SVD (target_k={target_k})...")
+    print(f"[SVD Cache] Computing {cache_id} SVD (target_k={target_k}) for {dataset_name}...")
     
     u, s, vt = svds(matrix, k=target_k)
     
@@ -43,6 +43,7 @@ def get_svd_cache(data_loader, k_max=None, matrix=None, cache_id="raw"):
     
     svd_data = {'u': u, 's': s, 'vt': vt}
     
+    os.makedirs(cache_dir, exist_ok=True)
     with open(svd_cache_path, 'wb') as f:
         pickle.dump(svd_data, f)
     

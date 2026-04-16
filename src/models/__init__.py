@@ -7,22 +7,17 @@ from .lightgcn import LightGCN
 from .ips_lae import IPS_LAE
 from .lae import LAE
 from .dlae import DLAE
-from .aspire import Aspire
-from .daspire import DAspire
-from .aspire_diag import AspireDiag
-from .aspire_rowsum import AspireRowsum
-from .daspire_diag import DAspireDiag
-from .daspire_rowsum import DAspireRowsum
 from .bspm import BSPM
 from .turbocf import TurboCF
-from .alpha_ease import AlphaEASE
-from .aspire_pure import AspirePure
 from .dan import EASE_DAN, DLAE_DAN
-from .aspire_ips import AspireIPS
 from .rlae import RLAE, RDLAE
 from .causal_aspire import CausalAspire
-from .causal_aspire_dropout import CausalAspireDropout
-from .causal_aspire_dr import CausalAspireDR
+from .fixed_aspire import FixedAspire
+from .mf_ips import MF_IPS
+from .dr_jl import DR_JL
+from .co_occurrence import CoOccurrence
+from .pmi_aspire import PMIAspire   
+from .pmi_lae import PMILAE
 
 MODEL_REGISTRY = {
     'ease': EASE,
@@ -34,26 +29,19 @@ MODEL_REGISTRY = {
     'ips_lae': IPS_LAE,
     'lae': LAE,
     'dlae': DLAE,
-    'aspire': Aspire,
-    'daspire': DAspire,
-    'aspire_diag': AspireDiag,
-    'aspire_rowsum': AspireRowsum,
-    'daspire_diag': DAspireDiag,
-    'daspire_rowsum': DAspireRowsum,
     'bspm': BSPM,
     'turbocf': TurboCF,
-    'alpha_ease': AlphaEASE,
-    'aspire_pure': AspirePure,
     'ease_dan': EASE_DAN,
     'dlae_dan': DLAE_DAN,
-    'aspire_ips': AspireIPS,
     'rlae': RLAE,
     'rdlae': RDLAE,
-    'causal_aspire': CausalAspire,  
-    'causal_aspire_dropout': CausalAspireDropout,
-    'causal_aspire_dr': CausalAspireDR,
-
-
+    'causal_aspire': CausalAspire,
+    'fixed_aspire': FixedAspire,
+    'mf_ips': MF_IPS,
+    'dr_jl': DR_JL,
+    'co_occurrence': CoOccurrence,
+    'pmi_lae': PMILAE,
+    'pmi_aspire': PMIAspire,
 }
 
 def get_model(model_name, config, data_loader):
@@ -73,3 +61,5 @@ def get_model(model_name, config, data_loader):
 
 def register_model(name, model_class):
     MODEL_REGISTRY[name] = model_class
+
+

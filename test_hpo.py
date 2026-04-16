@@ -11,16 +11,11 @@ from src.utils.config import load_yaml
 _eval_cfg = load_yaml('configs/evaluation.yaml')
 _main_metric = f"{_eval_cfg.get('main_metric', 'NDCG')}@{_eval_cfg.get('main_metric_k', 20)}"
 
-# 1. 대상 데이터셋 리스트
+# 1. 대상 데이터셋 리스트 (폴더 이름)
 datasets = [
-    'configs/datasets/ml-100k.yaml',
-    'configs/datasets/ml-1m.yaml',
-    'configs/datasets/steam.yaml',
-    # 'configs/datasets/ml-20m.yaml',
-    # 'configs/datasets/yelp2018.yaml',
-    # 'configs/datasets/gowalla.yaml'
-    # 'configs/datasets/amazon_electronics.yaml',
-    # 'configs/datasets/amazon_books.yaml'
+    'ml-100k',
+    'ml-1m',
+    'steam',
 ]
 
 # 2. 모델별 HPO 설정 리스트
@@ -28,64 +23,57 @@ experiments = [
     {
         'name': 'EASE',
         'model_cfg': 'configs/models/ease.yaml',
-        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 100, 'max': 10000, 'n_points': 10, 'scale': 'log'}]
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 10000, 'n_points': 10, 'scale': 'log'}]
     },
     {
         'name': 'causal_aspire',
         'model_cfg': 'configs/models/causal_aspire.yaml',
-        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 1, 'max': 100, 'n_points': 10, 'scale': 'log'},
-                    # {'name': 'alpha', 'type': 'float', 'min': 0.1, 'max': 1.0, 'n_points': 10, 'scale': 'linear'}
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 1000, 'n_points': 10, 'scale': 'log'},
+                    {'name': 'alpha', 'type': 'float', 'min': 0.1, 'max': 1.0, 'n_points': 10, 'scale': 'linear'}
                    ]
     },
-        {
-        'name': 'causal_aspire_dropout',
-        'model_cfg': 'configs/models/causal_aspire_dropout.yaml',
-        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 1, 'max': 100, 'n_points': 10, 'scale': 'log'},
-                    #  {'name': 'alpha', 'type': 'float', 'min': 0.1, 'max': 1.0, 'n_points': 10, 'scale': 'linear'},
-                    {'name': 'dropout_p', 'type': 'float', 'min': 0.1, 'max': 0.9, 'n_points': 9, 'scale': 'linear'}]
+    {
+        'name': 'fixed_aspire',
+        'model_cfg': 'configs/models/fixed_aspire.yaml',
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 0.1, 'max': 1000, 'n_points': 10, 'scale': 'log'},
+                   {'name': 'alpha', 'type': 'float', 'min': 0.1, 'max': 1.0, 'n_points': 10, 'scale': 'linear'}]
     },
     {
         'name' : 'ips_lae',
         'model_cfg': 'configs/models/ips_lae.yaml',
-        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 100, 'max': 10000, 'n_points': 10, 'scale': 'log'},
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 10000, 'n_points': 10, 'scale': 'log'},
                    {'name': 'wbeta', 'type': 'float', 'min': 0.1, 'max': 0.9, 'n_points': 9, 'scale': 'linear'}]
     },
-    # {
-    #     'name' : 'dlae',
-    #     'model_cfg': 'configs/models/dlae.yaml',
-    #     'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 100, 'max': 10000, 'n_points': 10, 'scale': 'log'},
-    #                {'name': 'dropout_p', 'type': 'float', 'min': 0.1, 'max': 0.9, 'n_points': 9, 'scale': 'linear'}]
-    # },
+    {
+        'name' : 'dlae',
+        'model_cfg': 'configs/models/dlae.yaml',
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 10000, 'n_points': 10, 'scale': 'log'},
+                   {'name': 'dropout_p', 'type': 'float', 'min': 0.1, 'max': 0.9, 'n_points': 9, 'scale': 'linear'}]
+    },
     {
         'name' : 'lae',
         'model_cfg': 'configs/models/lae.yaml',
-        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 100, 'max': 10000, 'n_points': 10, 'scale': 'log'}]
-    },
-    {
-        'name' : 'aspire_ips',
-        'model_cfg': 'configs/models/aspire_ips.yaml',
-        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 1000, 'n_points': 10, 'scale': 'log'},
-                   {'name': 'alpha', 'type': 'float', 'min': 0.2, 'max': 2.0, 'n_points': 10, 'scale': 'linear'}]
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 10000, 'n_points': 10, 'scale': 'log'}]
     },
     {
         'name' : 'rlae',
         'model_cfg': 'configs/models/RLAE.yaml',
-        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 100, 'max': 10000, 'n_points': 10, 'scale': 'log'},
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 10000, 'n_points': 10, 'scale': 'log'},
                    {'name': 'b', 'type': 'float', 'min': 0.0, 'max': 1.0, 'n_points': 11, 'scale': 'linear'}]
     },
-    # {
-    #     'name' : 'rdlae',
-    #     'model_cfg': 'configs/models/rdlae.yaml',
-    #     'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 1000, 'n_points': 10, 'scale': 'log'},
-    #                {'name': 'dropout_p', 'type': 'float', 'min': 0.1, 'max': 0.9, 'n_points': 9, 'scale': 'linear'}]
-    # },
+    {
+        'name' : 'rdlae',
+        'model_cfg': 'configs/models/rdlae.yaml',
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 1000, 'n_points': 10, 'scale': 'log'},
+                   {'name': 'dropout_p', 'type': 'float', 'min': 0.1, 'max': 0.9, 'n_points': 9, 'scale': 'linear'}]
+    },
     {
         'name' : 'ease_dan',
         'model_cfg': 'configs/models/ease_dan.yaml',
-        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 0.1, 'max': 1000, 'n_points': 11, 'scale': 'log'},
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 0.1, 'max': 10000, 'n_points': 11, 'scale': 'log'},
                    {'name': 'alpha', 'type': 'float', 'min': 0.1, 'max': 1.0, 'n_points': 5, 'scale': 'linear'},
                    {'name': 'beta', 'type': 'float', 'min': 0.1, 'max': 1.0, 'n_points': 5, 'scale': 'linear'}]
-    }
+    },
 ]
 
 hpo_cfg = {
@@ -147,29 +135,22 @@ def generate_global_report():
                 m_path = os.path.join(d_path, m_name)
                 if not os.path.isdir(m_path): continue
 
-                seed_files = glob.glob(os.path.join(m_path, "seed_*", "metrics.json"))
-                if not seed_files: continue
+                metrics_file = os.path.join(m_path, "metrics.json")
+                if not os.path.exists(metrics_file): continue
 
-                metrics_agg = {}
-                for sf in seed_files:
-                    try:
-                        with open(sf, 'r') as j:
-                            m_data = json.load(j)
-                            for k, v in m_data.items():
-                                metrics_agg.setdefault(k, []).append(v)
-                    except: pass
-                
-                if not metrics_agg: continue
-                entry = {
-                    'dataset': d_name, 
-                    'model': m_name, 
-                    'type': 'Default',
-                    'hyperparameters': 'Default'
-                }
-                for k, vals in metrics_agg.items():
-                    entry[f"{k}_mean"] = np.mean(vals)
-                    entry[f"{k}_std"] = np.std(vals) if len(vals) > 1 else 0.0
-                collected_data.append(entry)
+                try:
+                    with open(metrics_file, 'r') as j:
+                        m_data = json.load(j)
+                        entry = {
+                            'dataset': d_name, 
+                            'model': m_name, 
+                            'type': 'Default',
+                            'hyperparameters': 'Default'
+                        }
+                        for k, v in m_data.items():
+                            entry[f"{k}_mean"] = v
+                        collected_data.append(entry)
+                except: pass
             
     if not collected_data:
         return
@@ -210,15 +191,14 @@ if __name__ == "__main__":
     hpo_results_root = 'output/hpo_results'
     os.makedirs('output', exist_ok=True)
 
-    for d_cfg_path in datasets:
-        d_name = os.path.basename(d_cfg_path).replace('.yaml', '')
+    for d_name in datasets:
         print(f"\n{'#'*80}\n### TARGET DATASET: {d_name} \n{'#'*80}")
         
         for exp in experiments:
             print(f"\n>>> Running HPO: {exp['name']} on {d_name}")
             hpo_cfg['params'] = exp['params']
             minirec.hporun(
-                dataset_cfg=d_cfg_path,
+                dataset_name=d_name,
                 model_cfg=exp['model_cfg'],
                 hpo_cfg=hpo_cfg,
                 n_trials=None # 그리드 모드에서는 모든 조합 시도

@@ -1,0 +1,3 @@
+model:
+  model_name: "pmi_aspire"
+  alpha: 0.75

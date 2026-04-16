@@ -1,5 +1,0 @@
-model:
-  model_name: 'aspire_diag'
-  reg_lambda: 100.0
-  alpha: 1.0
-  device: 'auto'

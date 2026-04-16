@@ -12,11 +12,11 @@ from src.utils.config import load_yaml
 _eval_cfg = load_yaml('configs/evaluation.yaml')
 _main_metric = f"{_eval_cfg.get('main_metric', 'NDCG')}@{_eval_cfg.get('main_metric_k', 20)}"
 
-# 2. 대상 데이터셋 및 모델
+# 2. 대상 데이터셋 (폴더 이름) 및 모델
 datasets = [
-    'configs/datasets/ml-100k.yaml',
-    'configs/datasets/ml-1m.yaml',
-    'configs/datasets/steam.yaml',
+    'ml-100k',
+    'ml-1m',
+    'steam',
 ]
 
 models = [
@@ -26,9 +26,6 @@ models = [
     {'name': 'bspm',         'cfg': 'configs/models/bspm.yaml'},
     {'name': 'turbocf',      'cfg': 'configs/models/turbocf.yaml'},
 ]
-
-# 멀티시드 설정
-seeds = [42, 43, 44, 45, 46]
 
 def generate_global_report():
     """
@@ -83,29 +80,22 @@ def generate_global_report():
                 m_path = os.path.join(d_path, m_name)
                 if not os.path.isdir(m_path): continue
 
-                seed_files = glob.glob(os.path.join(m_path, "seed_*", "metrics.json"))
-                if not seed_files: continue
+                metrics_file = os.path.join(m_path, "metrics.json")
+                if not os.path.exists(metrics_file): continue
 
-                metrics_agg = {}
-                for sf in seed_files:
-                    try:
-                        with open(sf, 'r') as j:
-                            m_data = json.load(j)
-                            for k, v in m_data.items():
-                                metrics_agg.setdefault(k, []).append(v)
-                    except: pass
-                
-                if not metrics_agg: continue
-                entry = {
-                    'dataset': d_name, 
-                    'model': m_name, 
-                    'type': 'Default',
-                    'hyperparameters': 'Default'
-                }
-                for k, vals in metrics_agg.items():
-                    entry[f"{k}_mean"] = np.mean(vals)
-                    entry[f"{k}_std"] = np.std(vals) if len(vals) > 1 else 0.0
-                collected_data.append(entry)
+                try:
+                    with open(metrics_file, 'r') as j:
+                        m_data = json.load(j)
+                        entry = {
+                            'dataset': d_name, 
+                            'model': m_name, 
+                            'type': 'Default',
+                            'hyperparameters': 'Default'
+                        }
+                        for k, v in m_data.items():
+                            entry[f"{k}_mean"] = v
+                        collected_data.append(entry)
+                except: pass
             
     if not collected_data:
         return
@@ -136,30 +126,25 @@ def generate_global_report():
 
 if __name__ == "__main__":
     # 3. 메인 실행 루프
-    print(f"\n{'='*80}\n### Starting Multi-Seed Test Run (Default Configs) \n{'='*80}")
+    print(f"\n{'='*80}\n### Starting Test Run (Default Configs) \n{'='*80}")
 
-    for d_cfg_path in datasets:
-        d_name = os.path.basename(d_cfg_path).replace('.yaml', '')
+    for d_name in datasets:
         print(f"\n{'#'*80}\n### TARGET DATASET: {d_name} \n{'#'*80}")
         
         for m_info in models:
             m_name, m_cfg = m_info['name'], m_info['cfg']
-            print(f"  > Running: {m_name} ({len(seeds)} Seeds)")
+            print(f"  > Running: {m_name}")
             
-            for seed in seeds:
-                print(f"    Seed {seed} ...", end=" ", flush=True)
-                try:
-                    d_cfg = load_yaml(d_cfg_path)
-                    d_cfg['seed'] = seed
-                    minirec.run(
-                        dataset_cfg=d_cfg,
-                        model_cfg=m_cfg,
-                        output_path=f"output/test_run/{d_name}/{m_name}/seed_{seed}"
-                    )
-                    print("Done.")
-                except Exception as e:
-                    print(f"Error: {e}")
-            
-            generate_global_report()
+            try:
+                minirec.run(
+                    dataset_name=d_name,
+                    model_cfg=m_cfg,
+                    output_path=f"output/test_run/{d_name}/{m_name}"
+                )
+                print("Done.")
+            except Exception as e:
+                print(f"Error: {e}")
+        
+        generate_global_report()
 
-    print(f"\n{'='*80}\n✨ All multi-seed test runs finished!\n{'='*80}")
+    print(f"\n{'='*80}\n✨ All test runs finished!\n{'='*80}")

@@ -37,13 +37,14 @@ class IPS_LAE(BaseModel):
         
         print("  inverting matrix (CPU)...")
         # G = G + lambda * I
+        G_np = G_np.copy()
         G_np[np.diag_indices_from(G_np)] += self.reg_lambda
         
         P_np = np.linalg.inv(G_np)
         
         # Final weights: B_{ij} = -P_{ij} / P_{jj} (i != j), B_{ii} = 0
         diag_P = np.diag(P_np)
-        B_np = P_np / (-diag_P[:, np.newaxis] + 1e-12)
+        B_np = -P_np / (diag_P + 1e-12)
         np.fill_diagonal(B_np, 0)
         
         B = torch.tensor(B_np, dtype=torch.float32, device=self.device)

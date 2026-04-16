@@ -1,29 +1,11 @@
 import torch
+import numpy as np
+import scipy.sparse as sp
 from .base import BaseModel
+from src.utils.sparse import get_train_matrix_scipy
 
 
 class BSPM(BaseModel):
-    """
-    Blurring-Sharpening Process Models for Collaborative Filtering
-    SIGIR 2023 - Choi et al.
-
-    논문의 핵심 두 단계:
-      1) Blurring  : dZ/dt = (G_b - I) Z   (low-pass → 스무딩)
-      2) Sharpening: dZ/dt = (I - G_s) Z   (reverse → 고주파 복원)
-
-    Euler 이산화:
-      Blur step   : Z ← Z + h_b (Z @ G_b - Z) = (1 - h_b) Z + h_b (Z @ G_b)
-      Sharpen step: Z ← Z + h_s (Z - Z @ G_s) = (1 + h_s) Z - h_s (Z @ G_s)
-
-    하이퍼파라미터 (논문 권장 기본값):
-      K_b            : 블러링 step 수          (default: 2)
-      T_b            : 블러링 총 시간           (default: 1.0)  → h_b = T_b / K_b
-      K_s            : 샤프닝 step 수          (default: 1)
-      T_s            : 샤프닝 총 시간           (default: 2.5)  → h_s = T_s / K_s
-      idl_beta       : 최종 IDL 샤프닝 계수    (default: 0.2)
-      final_sharpening: 최종 한 번 더 샤프닝   (default: True)
-    """
-
     def __init__(self, config, data_loader):
         super().__init__(config, data_loader)
         self.K_b             = config['model'].get('K_b',              2)
@@ -32,52 +14,53 @@ class BSPM(BaseModel):
         self.T_s             = config['model'].get('T_s',            2.5)
         self.idl_beta        = config['model'].get('idl_beta',       0.2)
         self.final_sharpening = config['model'].get('final_sharpening', True)
+        self.eps             = 1e-12
 
-    # ------------------------------------------------------------------
     def fit(self, data_loader):
-        print(f"Fitting BSPM  K_b={self.K_b} T_b={self.T_b}  "
-              f"K_s={self.K_s} T_s={self.T_s}  "
-              f"idl_beta={self.idl_beta}  final_sharpen={self.final_sharpening}")
+        print(f"Fitting BSPM (K_b={self.K_b}, T_b={self.T_b}, K_s={self.K_s}, T_s={self.T_s})...")
 
-        R = self.get_train_matrix(data_loader).to(self.device).to_dense()
-        self.R = R  # (U, I)
+        X_sp = get_train_matrix_scipy(data_loader) # (U, I) sparse
 
-        # ── Blurring kernel G_b : row-stochastic item-item gram ──────
-        #    G_b = D^{-1} (R^T R),  eigenvalues ∈ [0, 1]
-        G_b = R.t() @ R                                        # (I, I)
-        D_b = G_b.sum(dim=1, keepdim=True).clamp(min=1e-12)
-        G_b = G_b / D_b
-
-        # ── Sharpening kernel G_s : 논문에서 동일한 low-pass kernel 사용 ──
-        #    (sharpening은 high-pass 방향으로 적용하므로 같은 G를 씀)
-        G_s = G_b
-
-        # ── 1) Blurring phase  (Euler ODE integration) ───────────────
-        #    ODE  : dZ/dt = (G_b - I) Z
-        #    Euler: Z_{n+1} = (1 - h_b) Z_n + h_b (Z_n @ G_b)
+        # ── 1. Blurring kernel G_b ──
+        # G_b = D^{-1} (X^T X)
+        print("  Computing blurring kernel G_b...")
+        # X^T X on CPU
+        G_raw_sp = X_sp.T @ X_sp # (I, I) sparse
+        G_raw = G_raw_sp.toarray().astype(np.float32)
+        
+        D_b = G_raw.sum(axis=1, keepdims=True) + self.eps
+        G_b = G_raw / D_b
+        
+        # ── 2. Combined weight matrix W ──
+        # We compute the polynomial filter W such that Z_final = X @ W
+        # Z_0 = I (identity item-item)
+        print("  Computing combined polynomial filter W...")
+        W = np.eye(self.n_items, dtype=np.float32)
+        
+        # Blurring phase: W = W @ ((1-h_b)I + h_b G_b)
         h_b = self.T_b / self.K_b
-        Z = R.clone()
+        W_blur = (1.0 - h_b) * np.eye(self.n_items, dtype=np.float32) + h_b * G_b
         for _ in range(self.K_b):
-            Z = (1.0 - h_b) * Z + h_b * (Z @ G_b)
-
-        # ── 2) Sharpening phase  (reverse Euler) ─────────────────────
-        #    ODE  : dZ/dt = (I - G_s) Z   (reverse direction)
-        #    Euler: Z_{n+1} = (1 + h_s) Z_n - h_s (Z_n @ G_s)
+            W = W @ W_blur
+            
+        # Sharpening phase: W = W @ ((1+h_s)I - h_s G_b)
         h_s = self.T_s / self.K_s
+        W_sharpen = (1.0 + h_s) * np.eye(self.n_items, dtype=np.float32) - h_s * G_b
         for _ in range(self.K_s):
-            Z = (1.0 + h_s) * Z - h_s * (Z @ G_s)
-
-        # ── 3) Final IDL sharpening (논문 best config) ────────────────
-        #    한 번의 추가 high-pass step: Z += beta * (Z - Z @ G_s)
+            W = W @ W_sharpen
+            
+        # Final IDL sharpening
         if self.final_sharpening:
-            Z = Z + self.idl_beta * (Z - Z @ G_s)
+            W = W @ ((1.0 + self.idl_beta) * np.eye(self.n_items, dtype=np.float32) - self.idl_beta * G_b)
 
-        self.Z = Z  # (U, I) — 최종 추천 점수 행렬
+        self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)
+        self.train_matrix_gpu = self.get_train_matrix(data_loader)
+        print("BSPM fitting complete.")
 
-    # ------------------------------------------------------------------
     def forward(self, user_indices):
-        return self.Z[user_indices]
+        # S_hat = r_u @ W
+        r_u = torch.index_select(self.train_matrix_gpu, 0, user_indices).to_dense()
+        return r_u @ self.weight_matrix
 
     def calc_loss(self, batch_data):
-        # Training-free 방법이므로 loss = 0
         return (torch.tensor(0.0, device=self.device),), None

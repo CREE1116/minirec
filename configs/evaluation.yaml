@@ -1,5 +1,7 @@
 # Global Evaluation Settings
+seed: 42
 top_k: [10, 20, 50]
+batch_size: 4096  # 평가 시 배치 사이즈 상향 (속도 가속)
 metrics: [
     "Recall",
     "uRecall",

@@ -1,6 +1,0 @@
-model:
-  model_name: 'daspire'
-  reg_lambda: 100.0  # 기본 L2 정규화
-  alpha: 1.0         # SNR 정화 강도
-  dropout_p: 0.5     # DLAE 방식의 적응형 대각 규제 (dropout probability)
-  device: 'auto'

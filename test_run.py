@@ -56,8 +56,15 @@ def generate_global_report():
                 try:
                     with open(summary_file, 'r') as j:
                         data = json.load(j)
-                        entry = {'dataset': d_name, 'model': m_name, 'type': 'HPO'}
-                        entry.update(data)
+                        hparams = data.get('best_params_per_seed', [{}])[0]
+                        entry = {
+                            'dataset': d_name, 
+                            'model': m_name, 
+                            'type': 'HPO',
+                            'hyperparameters': json.dumps(hparams)
+                        }
+                        clean_data = {k: v for k, v in data.items() if k != 'best_params_per_seed'}
+                        entry.update(clean_data)
                         collected_data.append(entry)
                 except: pass
             
@@ -71,8 +78,8 @@ def generate_global_report():
                 m_path = os.path.join(d_path, m_name)
                 if not os.path.isdir(m_path): continue
 
-                for m_type in ['val', 'test']:
-                    file_name = "val_metrics.json" if m_type == 'val' else "metrics.json"
+                for m_type in ['VAL', 'TEST']:
+                    file_name = "val_metrics.json" if m_type == 'VAL' else "metrics.json"
                     seed_metrics = []
                     for s in seeds:
                         m_file = os.path.join(m_path, f"seed_{s}", file_name)
@@ -86,7 +93,8 @@ def generate_global_report():
                     entry = {
                         'dataset': d_name, 
                         'model': m_name, 
-                        'type': f'Default_{m_type.upper()}'
+                        'type': f'Default_{m_type}',
+                        'hyperparameters': 'Default'
                     }
                     
                     all_keys = seed_metrics[0].keys()
@@ -100,7 +108,7 @@ def generate_global_report():
     if not collected_data: return
 
     df = pd.DataFrame(collected_data)
-    id_cols = ['dataset', 'model', 'type']
+    id_cols = ['dataset', 'model', 'type', 'hyperparameters']
     other_cols = sorted([c for c in df.columns if c not in id_cols])
     df = df[id_cols + other_cols]
 

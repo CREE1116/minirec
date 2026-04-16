@@ -92,8 +92,17 @@ def generate_global_report():
                 try:
                     with open(summary_file, 'r') as j:
                         data = json.load(j)
-                        entry = {'dataset': d_name, 'model': m_name, 'type': 'HPO'}
-                        entry.update(data)
+                        # Extract hyperparameters from HPO summary
+                        hparams = data.get('best_params_per_seed', [{}])[0]
+                        entry = {
+                            'dataset': d_name, 
+                            'model': m_name, 
+                            'type': 'HPO',
+                            'hyperparameters': json.dumps(hparams)
+                        }
+                        # Remove parameters from data to avoid column duplication
+                        clean_data = {k: v for k, v in data.items() if k != 'best_params_per_seed'}
+                        entry.update(clean_data)
                         collected_data.append(entry)
                 except: pass
             
@@ -109,8 +118,6 @@ def generate_global_report():
 
                 for m_type in ['VAL', 'TEST']:
                     file_name = "val_metrics.json" if m_type == 'VAL' else "metrics.json"
-                    
-                    # 5-seed average if exists
                     seed_metrics = []
                     seed_dirs = glob.glob(os.path.join(m_path, "seed_*"))
                     for sd in seed_dirs:
@@ -122,7 +129,12 @@ def generate_global_report():
                     
                     if not seed_metrics: continue
                     
-                    entry = {'dataset': d_name, 'model': m_name, 'type': f'Default_{m_type}'}
+                    entry = {
+                        'dataset': d_name, 
+                        'model': m_name, 
+                        'type': f'Default_{m_type}',
+                        'hyperparameters': 'Default'
+                    }
                     all_keys = seed_metrics[0].keys()
                     for k in all_keys:
                         vals = [m[k] for m in seed_metrics if k in m]
@@ -133,7 +145,8 @@ def generate_global_report():
     if not collected_data: return
 
     df = pd.DataFrame(collected_data)
-    id_cols = ['dataset', 'model', 'type']
+    # Reorder columns to put main info first
+    id_cols = ['dataset', 'model', 'type', 'hyperparameters']
     other_cols = sorted([c for c in df.columns if c not in id_cols])
     df = df[id_cols + other_cols]
 
@@ -148,8 +161,6 @@ def generate_global_report():
     for d_name in df['dataset'].unique():
         df_d = df[df['dataset'] == d_name]
         
-        # Display main test metric and best validation metric (if HPO)
-        k = _eval_cfg.get('main_metric_k', 20)
         val_col = f"Best_VAL_{_main_metric}_mean"
         test_col = f"{_main_metric}_mean"
         

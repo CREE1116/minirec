@@ -54,11 +54,12 @@ class DataLoader:
     def _prepare_sparse_tensors(self):
         """메모리 내 희소 텐서 선행 생성 및 경고 해결"""
         def to_sp(df):
-            # .copy()를 추가하여 Non-writable NumPy array 경고 해결
-            r = torch.from_numpy(df['user_id'].values.copy()).long()
-            c = torch.from_numpy(df['item_id'].values.copy()).long()
+            # torch.tensor()를 직접 사용하여 Non-writable NumPy array 경고 해결
+            r = torch.tensor(df['user_id'].values, dtype=torch.long)
+            c = torch.tensor(df['item_id'].values, dtype=torch.long)
             v = torch.ones(r.size(0), dtype=torch.float32)
-            return torch.sparse_coo_tensor(torch.stack([r, c]), v, (self.n_users, self.n_items)).coalesce()
+            # check_invariants=False를 통해 Sparse invariant 경고 제거
+            return torch.sparse_coo_tensor(torch.stack([r, c]), v, (self.n_users, self.n_items), check_invariants=False).coalesce()
 
         self.sp_train = to_sp(self.train_df)
         self.sp_train_valid = to_sp(pd.concat([self.train_df, self.valid_df]))
@@ -88,11 +89,11 @@ class DataLoader:
         norm_adj = d_mat.dot(adj_mat).dot(d_mat)
         norm_adj = norm_adj.tocoo()
         
-        # Convert to torch sparse
-        indices = torch.from_numpy(np.vstack((norm_adj.row, norm_adj.col)).astype(np.int64))
-        values = torch.from_numpy(norm_adj.data.astype(np.float32))
+        # Convert to torch sparse with check_invariants=False
+        indices = torch.tensor(np.vstack((norm_adj.row, norm_adj.col)), dtype=torch.long)
+        values = torch.tensor(norm_adj.data, dtype=torch.float32)
         shape = torch.Size(norm_adj.shape)
-        return torch.sparse_coo_tensor(indices, values, shape).coalesce()
+        return torch.sparse_coo_tensor(indices, values, shape, check_invariants=False).coalesce()
 
     def _save_to_cache(self):
         data = {
@@ -119,13 +120,14 @@ class DataLoader:
         return PyTorchDataLoader(ds, batch_size=batch_size, shuffle=True, collate_fn=ds.collate_fn)
 
     def get_validation_loader(self, batch_size):
-        ds = TensorDataset(torch.LongTensor(self.valid_df['user_id'].values.copy()), 
-                           torch.LongTensor(self.valid_df['item_id'].values.copy()))
+        # torch.tensor()로 안전하게 복사하여 경고 해결
+        ds = TensorDataset(torch.tensor(self.valid_df['user_id'].values, dtype=torch.long), 
+                           torch.tensor(self.valid_df['item_id'].values, dtype=torch.long))
         return PyTorchDataLoader(ds, batch_size=batch_size, shuffle=False)
 
     def get_final_loader(self, batch_size):
-        ds = TensorDataset(torch.LongTensor(self.test_df['user_id'].values.copy()), 
-                           torch.LongTensor(self.test_df['item_id'].values.copy()))
+        ds = TensorDataset(torch.tensor(self.test_df['user_id'].values, dtype=torch.long), 
+                           torch.tensor(self.test_df['item_id'].values, dtype=torch.long))
         return PyTorchDataLoader(ds, batch_size=batch_size, shuffle=False)
 
 class RecSysDataset(Dataset):
@@ -163,4 +165,4 @@ class RecSysDataset(Dataset):
                         if s != int(i_np[idx]) and s not in seen:
                             final_neg[idx, j] = s
                             break
-        return {'user_id': torch.LongTensor(u_np).unsqueeze(1), 'pos_item_id': torch.LongTensor(i_np).unsqueeze(1), 'neg_item_id': torch.LongTensor(final_neg)}
+        return {'user_id': torch.tensor(u_np, dtype=torch.long).unsqueeze(1), 'pos_item_id': torch.tensor(i_np, dtype=torch.long).unsqueeze(1), 'neg_item_id': torch.tensor(final_neg, dtype=torch.long)}

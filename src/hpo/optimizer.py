@@ -21,11 +21,11 @@ class BayesianOptimizer:
         self.maximize = hpo_cfg.get('direction', 'max') == 'max'
         self.use_test_for_hpo = hpo_cfg.get('use_test_for_hpo', False)
 
-        # HPO trials seeds (for averaging results per trial)
+        # HPO trials seeds
         if 'seeds' in hpo_cfg:
             self.seeds = hpo_cfg['seeds']
         else:
-            n_seeds = hpo_cfg.get('n_seeds', 1) # Default to 1 as requested "rigid"
+            n_seeds = hpo_cfg.get('n_seeds', 1) 
             self.seeds = [42 + i for i in range(n_seeds)]
 
         self.patience = hpo_cfg.get('patience', 20)
@@ -34,7 +34,9 @@ class BayesianOptimizer:
 
         # Load evaluation config for metric and seeds
         eval_cfg = load_yaml('configs/evaluation.yaml')
-        self.metric = f"{eval_cfg.get('main_metric', 'NDCG')}@{eval_cfg.get('main_metric_k', 20)}"
+        self.metric_name = eval_cfg.get('main_metric', 'NDCG')
+        self.metric_k = eval_cfg.get('main_metric_k', 20)
+        self.metric = f"{self.metric_name}@{self.metric_k}"
         
         m_name = self.model_cfg.get('model_name')
         if not m_name and 'model' in self.model_cfg:
@@ -54,19 +56,11 @@ class BayesianOptimizer:
             p_type = p_def.get('type', 'float')
             
             if 'min' in p_def and 'max' in p_def and 'n_points' in p_def:
-                low = float(p_def['min'])
-                high = float(p_def['max'])
-                n = int(p_def['n_points'])
+                low, high, n = float(p_def['min']), float(p_def['max']), int(p_def['n_points'])
                 scale = p_def.get('scale', 'linear').lower()
-                
-                if scale == 'log':
-                    values = np.logspace(np.log10(low), np.log10(high), num=n).tolist()
-                else:
-                    values = np.linspace(low, high, num=n).tolist()
-                
-                if p_type == 'int':
-                    values = sorted(list(set([int(round(v)) for v in values])))
-                
+                if scale == 'log': values = np.logspace(np.log10(low), np.log10(high), num=n).tolist()
+                else: values = np.linspace(low, high, num=n).tolist()
+                if p_type == 'int': values = sorted(list(set([int(round(v)) for v in values])))
                 search_space[name] = values
                 continue
 
@@ -80,8 +74,7 @@ class BayesianOptimizer:
                 if len(parts) == 2:
                     low, high = map(int, parts)
                     search_space[name] = list(range(low, high + 1))
-                else:
-                    search_space[name] = [int(x) for x in parts]
+                else: search_space[name] = [int(x) for x in parts]
             elif p_type == 'float':
                 points = p_range.split()
                 search_space[name] = [float(x) for x in points]
@@ -94,54 +87,41 @@ class BayesianOptimizer:
             search_space = self.get_search_space()
             for name, choices in search_space.items():
                 val = trial.suggest_categorical(name, choices)
-                target_path = name if '.' in name else f"model.{name}"
-                keys = target_path.split('.')
+                keys = (name if '.' in name else f"model.{name}").split('.')
                 d = model_cfg
                 for k in keys[:-1]: d = d.setdefault(k, {})
                 d[keys[-1]] = val
         else:
             for p_def in self.params_list:
-                name = p_def['name']
-                p_type = p_def.get('type', 'float')
-                p_range = p_def.get('range')
-                p_log = p_def.get('log', False)
-
+                name, p_type, p_range, p_log = p_def['name'], p_def.get('type', 'float'), p_def.get('range'), p_def.get('log', False)
                 if p_type == 'float':
                     low, high = map(float, p_range.split()[:2])
                     val = trial.suggest_float(name, low, high, log=p_log)
                 elif p_type == 'int':
                     low, high = map(int, p_range.split()[:2])
                     val = trial.suggest_int(name, low, high, log=p_log)
-                elif p_type == 'int_for_k':
-                    max_k = self.get_max_k()
-                    val = trial.suggest_int(name, 1, max_k)
+                elif p_type == 'int_for_k': val = trial.suggest_int(name, 1, self.get_max_k())
                 elif p_type == 'categorical':
                     choices = p_range
                     if isinstance(choices, str): choices = choices.split()
                     val = trial.suggest_categorical(name, choices)
-
-                target_path = name if '.' in name else f"model.{name}"
-                keys = target_path.split('.')
+                keys = (name if '.' in name else f"model.{name}").split('.')
                 d = model_cfg
                 for k in keys[:-1]: d = d.setdefault(k, {})
                 d[keys[-1]] = val
         
-        # Seed is handled inside run_func (which gets it from evaluation.yaml or passed manually)
         metrics = self.run_func(self.dataset_name, model_cfg, hpo_mode=True, use_test_for_hpo=self.use_test_for_hpo)
         val = metrics.get(self.metric)
         if val is None:
             for k, v in metrics.items():
-                if self.metric in k:
-                    val = v
-                    break
+                if self.metric in k: val = v; break
         return val if val is not None else 0.0
 
     def get_max_k(self):
         if self._max_k is None:
             from src.data.loader import DataLoader
             temp_dl = DataLoader({'dataset_name': self.dataset_name})
-            data_full_rank = min(temp_dl.n_users, temp_dl.n_items) - 1
-            self._max_k = min(data_full_rank, 2000)
+            self._max_k = min(min(temp_dl.n_users, temp_dl.n_items) - 1, 2000)
         return self._max_k
 
     def save_results(self, study, output_dir):
@@ -153,9 +133,8 @@ class BayesianOptimizer:
 
     def search(self, n_trials=20):
         all_seed_results = []
+        all_best_val_scores = []
         all_best_params = []
-        
-        # 데이터셋이 바뀔 때마다 max_k를 리셋하기 위해 search 시작 시 초기화
         self._max_k = None
         
         for seed in self.seeds:
@@ -164,30 +143,26 @@ class BayesianOptimizer:
             os.makedirs(seed_dir, exist_ok=True)
             
             if self.mode == 'grid':
-                search_space = self.get_search_space()
-                sampler = optuna.samplers.GridSampler(search_space)
+                sampler = optuna.samplers.GridSampler(self.get_search_space())
                 actual_n_trials = None
-                print(f"[Grid Mode] Search Space: {search_space}")
             else:
                 sampler = optuna.samplers.TPESampler(seed=seed)
                 actual_n_trials = n_trials
 
             study = optuna.create_study(direction='maximize' if self.maximize else 'minimize', sampler=sampler)
-            
             study.optimize(lambda t: self.objective(t, seed), n_trials=actual_n_trials)
             
             self.save_results(study, seed_dir)
-            best_params = study.best_params
-            all_best_params.append(best_params)
+            all_best_val_scores.append(study.best_value)
+            all_best_params.append(study.best_params)
             
             with open(os.path.join(seed_dir, 'best_params.json'), 'w') as f:
-                json.dump(best_params, f, indent=4)
+                json.dump(study.best_params, f, indent=4)
 
-            # Evaluate BEST
+            # Evaluate BEST on Test Set
             best_model_cfg = copy.deepcopy(self.model_cfg)
-            for name, val in best_params.items():
-                target_path = name if '.' in name else f"model.{name}"
-                keys = target_path.split('.')
+            for name, val in study.best_params.items():
+                keys = (name if '.' in name else f"model.{name}").split('.')
                 d = best_model_cfg
                 for k in keys[:-1]: d = d.setdefault(k, {})
                 d[keys[-1]] = val
@@ -197,20 +172,29 @@ class BayesianOptimizer:
                                         hpo_mode=False)
             all_seed_results.append(test_metrics)
 
-        summary = self.report_final_results(all_seed_results)
+        summary = self.report_final_results(all_seed_results, all_best_val_scores)
         summary['best_params_per_seed'] = all_best_params
         return summary
 
-    def report_final_results(self, results):
-        if not results: return {}
-        all_keys = sorted(list(results[0].keys()))
+    def report_final_results(self, test_results, best_val_scores):
+        if not test_results: return {}
+        all_keys = sorted(list(test_results[0].keys()))
         summary = {}
         print(f"\n{'#'*60}\n FINAL HPO REPORT ({len(self.seeds)} Seeds) \n{'#'*60}")
+        
+        # 1. Best Validation Score (the one optimized for)
+        val_mean, val_std = np.mean(best_val_scores), np.std(best_val_scores)
+        val_key = f"Best_VAL_{self.metric}"
+        summary[f"{val_key}_mean"], summary[f"{val_key}_std"] = float(val_mean), float(val_std)
+        print(f"{val_key:<20}: {val_mean:.4f} ± {val_std:.4f} (Selection Metric)")
+        
+        # 2. Test Results
         for key in all_keys:
-            vals = [res[key] for res in results if key in res]
+            vals = [res[key] for res in test_results if key in res]
             mean, std = np.mean(vals), np.std(vals)
             summary[f"{key}_mean"], summary[f"{key}_std"] = float(mean), float(std)
             print(f"{key:<20}: {mean:.4f} ± {std:.4f}")
+            
         summary_path = os.path.join(self.hpo_root, 'final_summary.json')
         with open(summary_path, 'w') as f:
             json.dump(summary, f, indent=4)

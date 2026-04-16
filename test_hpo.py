@@ -26,29 +26,16 @@ experiments = [
         'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 10000, 'n_points': 10, 'scale': 'log'}]
     },
     {
-        'name': 'causal_aspire',
-        'model_cfg': 'configs/models/causal_aspire.yaml',
-        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 1000, 'n_points': 10, 'scale': 'log'},
-                    {'name': 'alpha', 'type': 'float', 'min': 0.1, 'max': 1.0, 'n_points': 10, 'scale': 'linear'}
-                   ]
-    },
-    {
         'name': 'fixed_aspire',
         'model_cfg': 'configs/models/fixed_aspire.yaml',
         'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 0.1, 'max': 1000, 'n_points': 10, 'scale': 'log'},
-                   {'name': 'alpha', 'type': 'float', 'min': 0.1, 'max': 1.0, 'n_points': 10, 'scale': 'linear'}]
+                   {'name': 'alpha', 'type': 'float', 'min': 0.0, 'max': 1.0, 'n_points': 11, 'scale': 'linear'}]
     },
     {
         'name' : 'ips_lae',
         'model_cfg': 'configs/models/ips_lae.yaml',
         'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 10000, 'n_points': 10, 'scale': 'log'},
                    {'name': 'wbeta', 'type': 'float', 'min': 0.1, 'max': 0.9, 'n_points': 9, 'scale': 'linear'}]
-    },
-    {
-        'name' : 'dlae',
-        'model_cfg': 'configs/models/dlae.yaml',
-        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 10000, 'n_points': 10, 'scale': 'log'},
-                   {'name': 'dropout_p', 'type': 'float', 'min': 0.1, 'max': 0.9, 'n_points': 9, 'scale': 'linear'}]
     },
     {
         'name' : 'lae',
@@ -62,18 +49,18 @@ experiments = [
                    {'name': 'b', 'type': 'float', 'min': 0.0, 'max': 1.0, 'n_points': 11, 'scale': 'linear'}]
     },
     {
-        'name' : 'rdlae',
-        'model_cfg': 'configs/models/rdlae.yaml',
-        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 10, 'max': 1000, 'n_points': 10, 'scale': 'log'},
-                   {'name': 'dropout_p', 'type': 'float', 'min': 0.1, 'max': 0.9, 'n_points': 9, 'scale': 'linear'}]
-    },
-    {
         'name' : 'ease_dan',
         'model_cfg': 'configs/models/ease_dan.yaml',
-        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 0.1, 'max': 10000, 'n_points': 11, 'scale': 'log'},
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 0.1, 'max': 1000, 'n_points': 10, 'scale': 'log'},
                    {'name': 'alpha', 'type': 'float', 'min': 0.1, 'max': 1.0, 'n_points': 5, 'scale': 'linear'},
                    {'name': 'beta', 'type': 'float', 'min': 0.1, 'max': 1.0, 'n_points': 5, 'scale': 'linear'}]
     },
+    {
+        'name' : 'pmi_lae',
+        'model_cfg': 'configs/models/pmi_lae.yaml',
+        'params': [{'name': 'reg_lambda', 'type': 'float', 'min': 0.1, 'max': 1000, 'n_points': 11, 'scale': 'log'},
+                   {'name': 'alpha', 'type': 'float', 'min': 0.1, 'max': 2.0, 'n_points': 10, 'scale': 'linear'}]
+    }
 ]
 
 hpo_cfg = {
@@ -84,7 +71,7 @@ hpo_cfg = {
 
 def generate_global_report():
     """
-    hpo_results와 test_run 결과를 모두 취합하여 하나의 CSV로 저장
+    hpo_results와 test_run 결과를 모두 취합하여 하나의 CSV로 저장 (Val/Test 대응)
     """
     report_root = 'output/global_reports'
     os.makedirs(report_root, exist_ok=True)
@@ -102,30 +89,15 @@ def generate_global_report():
                 summary_file = os.path.join(m_path, "final_summary.json")
                 if not os.path.exists(summary_file): continue
                 
-                hparams = {}
-                seed_dirs = sorted(glob.glob(os.path.join(m_path, "seed_*")))
-                if seed_dirs:
-                    bp_path = os.path.join(seed_dirs[0], "best_params.json")
-                    if os.path.exists(bp_path):
-                        try:
-                            with open(bp_path, 'r') as bp: hparams = json.load(bp)
-                        except: pass
-
                 try:
                     with open(summary_file, 'r') as j:
                         data = json.load(j)
-                        data.pop('best_params_per_seed', None)
-                        entry = {
-                            'dataset': d_name, 
-                            'model': m_name, 
-                            'type': 'HPO',
-                            'hyperparameters': json.dumps(hparams)
-                        }
+                        entry = {'dataset': d_name, 'model': m_name, 'type': 'HPO'}
                         entry.update(data)
                         collected_data.append(entry)
                 except: pass
             
-    # 2. Test Run 결과 수집
+    # 2. Test Run 결과 수집 (Val/Test 분리)
     test_run_base = 'output/test_run'
     if os.path.exists(test_run_base):
         for d_name in os.listdir(test_run_base):
@@ -135,36 +107,38 @@ def generate_global_report():
                 m_path = os.path.join(d_path, m_name)
                 if not os.path.isdir(m_path): continue
 
-                metrics_file = os.path.join(m_path, "metrics.json")
-                if not os.path.exists(metrics_file): continue
-
-                try:
-                    with open(metrics_file, 'r') as j:
-                        m_data = json.load(j)
-                        entry = {
-                            'dataset': d_name, 
-                            'model': m_name, 
-                            'type': 'Default',
-                            'hyperparameters': 'Default'
-                        }
-                        for k, v in m_data.items():
-                            entry[f"{k}_mean"] = v
-                        collected_data.append(entry)
-                except: pass
+                for m_type in ['VAL', 'TEST']:
+                    file_name = "val_metrics.json" if m_type == 'VAL' else "metrics.json"
+                    
+                    # 5-seed average if exists
+                    seed_metrics = []
+                    seed_dirs = glob.glob(os.path.join(m_path, "seed_*"))
+                    for sd in seed_dirs:
+                        m_file = os.path.join(sd, file_name)
+                        if os.path.exists(m_file):
+                            try:
+                                with open(m_file, 'r') as f: seed_metrics.append(json.load(f))
+                            except: pass
+                    
+                    if not seed_metrics: continue
+                    
+                    entry = {'dataset': d_name, 'model': m_name, 'type': f'Default_{m_type}'}
+                    all_keys = seed_metrics[0].keys()
+                    for k in all_keys:
+                        vals = [m[k] for m in seed_metrics if k in m]
+                        entry[f"{k}_mean"] = np.mean(vals)
+                        entry[f"{k}_std"] = np.std(vals) if len(vals) > 1 else 0.0
+                    collected_data.append(entry)
             
-    if not collected_data:
-        return
+    if not collected_data: return
 
     df = pd.DataFrame(collected_data)
-    
-    # ID 컬럼 배치 및 메트릭 정렬
-    id_cols = ['dataset', 'model', 'type', 'hyperparameters']
+    id_cols = ['dataset', 'model', 'type']
     other_cols = sorted([c for c in df.columns if c not in id_cols])
     df = df[id_cols + other_cols]
 
     main_metric_mean = f"{_main_metric}_mean"
     if main_metric_mean in df.columns:
-        df[main_metric_mean] = pd.to_numeric(df[main_metric_mean], errors='coerce')
         df = df.sort_values(by=['dataset', main_metric_mean], ascending=[True, False])
 
     csv_path = os.path.join(report_root, 'integrated_report.csv')
@@ -174,16 +148,17 @@ def generate_global_report():
     for d_name in df['dataset'].unique():
         df_d = df[df['dataset'] == d_name]
         
-        # 표시할 컬럼들 (기본 메트릭 + 언바이어스드 메트릭)
+        # Display main test metric and best validation metric (if HPO)
         k = _eval_cfg.get('main_metric_k', 20)
-        display_cols = ['model', 'type', f'NDCG@{k}_mean', f'uNDCG@{k}_mean', f'Recall@{k}_mean', f'uRecall@{k}_mean']
+        val_col = f"Best_VAL_{_main_metric}_mean"
+        test_col = f"{_main_metric}_mean"
         
-        # 데이터프레임에 실제 존재하는 컬럼만 필터링
-        p_cols = [c for c in display_cols if c in df_d.columns]
-        if 'model' not in p_cols: p_cols.insert(0, 'model')
+        cols = ['model', 'type']
+        if val_col in df_d.columns: cols.append(val_col)
+        if test_col in df_d.columns: cols.append(test_col)
         
         print(f"\n[Dataset: {d_name}]")
-        print(df_d[p_cols].to_string(index=False))
+        print(df_d[cols].to_string(index=False))
     print(f"\n✨ Integrated report updated at '{csv_path}'")
 
 if __name__ == "__main__":

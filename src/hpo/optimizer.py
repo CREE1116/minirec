@@ -172,17 +172,16 @@ class BayesianOptimizer:
                                         hpo_mode=False)
             all_seed_results.append(test_metrics)
 
-        summary = self.report_final_results(all_seed_results, all_best_val_scores)
-        summary['best_params_per_seed'] = all_best_params
+        summary = self.report_final_results(all_seed_results, all_best_val_scores, all_best_params)
         return summary
 
-    def report_final_results(self, test_results, best_val_scores):
+    def report_final_results(self, test_results, best_val_scores, best_params_list):
         if not test_results: return {}
         all_keys = sorted(list(test_results[0].keys()))
         summary = {}
         print(f"\n{'#'*60}\n FINAL HPO REPORT ({len(self.seeds)} Seeds) \n{'#'*60}")
         
-        # 1. Best Validation Score (the one optimized for)
+        # 1. Best Validation Score
         val_mean, val_std = np.mean(best_val_scores), np.std(best_val_scores)
         val_key = f"Best_VAL_{self.metric}"
         summary[f"{val_key}_mean"], summary[f"{val_key}_std"] = float(val_mean), float(val_std)
@@ -195,6 +194,9 @@ class BayesianOptimizer:
             summary[f"{key}_mean"], summary[f"{key}_std"] = float(mean), float(std)
             print(f"{key:<20}: {mean:.4f} ± {std:.4f}")
             
+        # 3. Include best params in summary BEFORE saving
+        summary['best_params_per_seed'] = best_params_list
+
         summary_path = os.path.join(self.hpo_root, 'final_summary.json')
         with open(summary_path, 'w') as f:
             json.dump(summary, f, indent=4)

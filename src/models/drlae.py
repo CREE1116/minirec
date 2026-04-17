@@ -6,6 +6,10 @@ from .base import BaseModel
 from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
 
 class DRLAE(BaseModel):
+    """
+    Doubly Robust Linear AutoEncoder (DRLAE)
+    Optimized with Strict Minimal Memory and Block-wise construction.
+    """
     def __init__(self, config, data_loader):
         super().__init__(config, data_loader)
         
@@ -13,13 +17,13 @@ class DRLAE(BaseModel):
         self.lambda_base = np.float32(model_cfg.get('reg_lambda', 500.0))
         self.lambda_var = np.float32(model_cfg.get('lambda_var', 1.0))
         self.min_prop = np.float32(model_cfg.get('min_prop', 1e-4))
-        self.gamma_val = np.float32(model_cfg.get('gamma', 0.5)) # renamed to avoid conflict
+        self.gamma_val = np.float32(model_cfg.get('gamma', 0.5)) 
         self.eps = np.float32(1e-12)
         
         self.weight_matrix = None
 
     def fit(self, data_loader):
-        print(f"Fitting DRLAE on CPU float32...")
+        print(f"Fitting DRLAE on CPU with Strict minimal memory...")
         X_sp = get_train_matrix_scipy(data_loader)
         self.train_matrix_cpu = X_sp.tocsr() # Hybrid inference
         
@@ -29,13 +33,12 @@ class DRLAE(BaseModel):
         p_vec = np.clip(p_vec, a_min=self.min_prop, a_max=None).astype(np.float32)
         
         # 2. Optimized Gram matrix calculation (Block-wise)
-        print("  Computing Gram matrix (Block-wise CPU)...")
-        G_np = compute_gram_matrix(X_sp, data_loader)
-        
-        # 3. Bias removal (IPS style): S_star = S / (p_i * p_j)
-        print("  Applying propensity weighting...")
-        G_np /= p_vec.reshape(-1, 1)
-        G_np /= p_vec.reshape(1, -1)
+        # S_star = S / (p_i * p_j)
+        # item_weights for compute_gram_matrix applies D_i @ G @ D_i
+        # So we pass 1/p_vec as item_weights
+        print("  Computing Weighted Gram matrix (Block-wise CPU)...")
+        inv_p_vec = (np.float32(1.0) / p_vec).astype(np.float32)
+        G_np = compute_gram_matrix(X_sp, data_loader, item_weights=inv_p_vec)
         
         # 4. Variance-Penalized Regularization
         print("  Applying variance penalty...")
@@ -55,16 +58,16 @@ class DRLAE(BaseModel):
             G_np[np.diag_indices_from(G_np)] += self.lambda_base * np.float32(10)
             P_inv = la.inv(G_np, overwrite_a=True).astype(np.float32)
         
-        del G_np, item_counts, p_vec, S_diag, var_penalty, omega_diag
+        del G_np, item_counts, p_vec, S_diag, var_penalty, omega_diag, inv_p_vec
         gc.collect()
 
         # 6. Final W 도출
-        P_diag = np.diag(P_inv).astype(np.float32)
-        W_np = (-P_inv / (P_diag[np.newaxis, :] + self.eps)).astype(np.float32)
+        diag_P = np.diag(P_inv).astype(np.float32)
+        W_np = (-P_inv / (diag_P[np.newaxis, :] + self.eps)).astype(np.float32)
         np.fill_diagonal(W_np, 0)
         
         self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)
-        del P_inv, W_np, P_diag
+        del P_inv, W_np, diag_P
         
         gc.collect()
         if 'cuda' in str(self.device):

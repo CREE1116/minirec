@@ -61,30 +61,28 @@ def compute_gram_matrix(X, data_loader=None, weights=None, item_weights=None, bl
     for start in range(0, n_items, block_size):
         end = min(start + block_size, n_items)
         
-        # (Users, Block) dense slice - approx 0.8GB for block_size=5000
-        X_block = X_csc[:, start:end].toarray().astype(np.float32)
-        
+        # [Critical] Convert to float32 BEFORE toarray to save 50% memory in temporary block
+        X_block = X_csc[:, start:end].astype(np.float32).toarray()
+
         # Apply User Weights (Propensity/Adaptive)
         if weights is not None:
             X_block *= weights
-            
+
         # G_block = X.T @ X_block
-        # CSR @ Dense is handled by optimized BLAS (Standard in NumPy/SciPy)
         G_block = (X_T_csr @ X_block).astype(np.float32)
-        
+
         # Apply Item Weights (Normalization)
         if item_weights is not None:
-            # Row-wise scale: G[i, j] *= item_weights[i]
-            # Column-wise scale: G[i, j] *= item_weights[j]
-            G_block *= item_weights[:, np.newaxis] # Item weights for entire items
-            G_block *= item_weights[start:end]     # Item weights for current block
-            
+            G_block *= item_weights[:, np.newaxis] 
+            G_block *= item_weights[start:end]     
+
         G[:, start:end] = G_block
-        
+
         del X_block, G_block
         if start % (block_size * 4) == 0:
             gc.collect()
 
-    print(f"[SparseUtil] Dense Gram computation complete. Peak RAM used: ~{10 + (n_items*n_users*4/1e9):.1f}GB")
-    
-    return G
+        print(f"[SparseUtil] Dense Gram computation complete. Peak RAM used during calc: ~{10 + (n_items*n_users*4/1e9):.1f}GB")
+
+        # [Critical] DO NOT .copy() here. Returns the 8.3GB matrix directly to save memory.
+        return G

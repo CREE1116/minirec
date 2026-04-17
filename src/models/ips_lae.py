@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import gc
 from .base import BaseModel
 from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
 
@@ -29,30 +30,53 @@ class IPS_LAE(BaseModel):
         return torch.tensor(1 / (p + 1e-12), dtype=torch.float32, device=self.device)
 
     def fit(self, data_loader):
-        print(f"Fitting IPS_LAE (lambda={self.reg_lambda}) on CPU/GPU Hybrid...")
+        print(f"Fitting IPS_LAE (lambda={self.reg_lambda}) on {self.device}...")
         
         # 1. Load data onto CPU
         X_sp = get_train_matrix_scipy(data_loader)
         self.train_matrix_cpu = X_sp.tocsr()
 
-        print("  computing gram matrix (CPU)...")
-        G_np = compute_gram_matrix(X_sp, data_loader)
+        print(f"  computing gram matrix (on {self.device})...")
+        G_np = compute_gram_matrix(X_sp, data_loader, device=self.device)
         
-        # 2. Ridge Inversion on CPU
-        print("  inverting matrix (CPU)...")
-        G_np[np.diag_indices_from(G_np)] += self.reg_lambda
-        P_np = np.linalg.inv(G_np)
-        
-        diag_P = np.diag(P_np)
-        B_np = -P_np / (diag_P + 1e-12)
-        np.fill_diagonal(B_np, 0)
-        
-        B_gpu = torch.tensor(B_np, dtype=torch.float32, device=self.device)
+        # 2. Ridge Inversion
+        if 'cuda' in str(self.device) and G_np.shape[0] < 20000:
+            print("  inverting matrix (GPU)...")
+            G_torch = torch.from_numpy(G_np).to(self.device)
+            del G_np
+            gc.collect()
+            
+            G_torch.diagonal().add_(self.reg_lambda)
+            P_torch = torch.linalg.inv(G_torch)
+            del G_torch
+            
+            diag_P = torch.diagonal(P_torch)
+            B_gpu = -P_torch / (diag_P + 1e-12)
+            B_gpu.diagonal().zero_()
+            del P_torch
+        else:
+            print("  inverting matrix (CPU)...")
+            G_np[np.diag_indices_from(G_np)] += self.reg_lambda
+            P_np = np.linalg.inv(G_np)
+            del G_np
+            gc.collect()
+            
+            diag_P = np.diag(P_np)
+            B_np = -P_np / (diag_P + 1e-12)
+            np.fill_diagonal(B_np, 0)
+            
+            B_gpu = torch.tensor(B_np, dtype=torch.float32, device=self.device)
+            del P_np, B_np
         
         # 3. Apply IPS weighting on GPU
         inv_p = self._compute_inv_propensity(X_sp)
         self.weight_matrix = B_gpu * inv_p.view(1, -1)
+        self.weight_matrix.diagonal().zero_()
+        del B_gpu, inv_p
         
+        gc.collect()
+        if 'cuda' in str(self.device):
+            torch.cuda.empty_cache()
         print("IPS_LAE fitting complete.")
 
     def forward(self, user_indices):

@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 from scipy import sparse
+import gc
 from .base import BaseModel
 from src.utils.sparse import get_train_matrix_scipy
 
@@ -46,7 +47,13 @@ def edge_homophily(X: sparse.csr_matrix,
     mask = np.triu(np.ones_like(G_np, dtype=bool), k=1) & (w > 0)
     num = (w * sim)[mask].sum()
     den = w[mask].sum()
-    return float(num / den) if den > 0 else 0.0
+    
+    res = float(num / den) if den > 0 else 0.0
+    
+    del G_np, degree, degree_sum, denom, sim, min_deg, w, mask
+    gc.collect()
+    
+    return res
 
 
 # ── EASE + DAN ────────────────────────────────────────────────────────────────
@@ -67,7 +74,7 @@ class EASE_DAN(BaseModel):
         self.weight_matrix = None
 
     def fit(self, data_loader):
-        print(f"Fitting EASE_DAN (reg_p={self.reg_p}) on CPU...")
+        print(f"Fitting EASE_DAN (reg_p={self.reg_p}) on {self.device}...")
         X_sp = get_train_matrix_scipy(data_loader)
         self.train_matrix_cpu = X_sp.tocsr() # Hybrid inference
 
@@ -86,24 +93,57 @@ class EASE_DAN(BaseModel):
         print(f"  Gini={gini:.4f}, α={alpha:.4f}, β={beta:.4f}")
 
         # 2. 유저 정규화 (X_tilde = D_U^{-β} X)
-        print("  computing gram matrix with user normalization (CPU)...")
+        print("  computing gram matrix with user normalization (CPU Sparse)...")
+        # Optimization: use multiply directly instead of creating large D_U
         X_T_weighted = X_sp.multiply(np.power(user_counts + self.eps, -beta).reshape(-1, 1)).T
-        G = X_T_weighted.dot(X_sp).toarray().astype(np.float32)
-
-        G[np.diag_indices(self.n_items)] += self.reg_p
+        G_np = X_T_weighted.dot(X_sp).toarray().astype(np.float32)
         
-        print("  inverting matrix on CPU...")
-        P = np.linalg.inv(G)
-        diag_P = np.diag(P)
-        W = -P / (diag_P.reshape(1, -1) + self.eps)
-        np.fill_diagonal(W, 0)
-        
-        # 5. 아이템 정규화 (공식 버전 alpha 반영)
-        item_power = np.power(item_counts + self.eps, -alpha)
-        W = W * (1.0 / (item_power + self.eps)).reshape(-1, 1) * item_power.reshape(1, -1)
-        np.fill_diagonal(W, 0)
+        del X_T_weighted
+        gc.collect()
 
-        self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)
+        if 'cuda' in str(self.device) and G_np.shape[0] < 20000:
+            print("  inverting matrix (GPU)...")
+            G_torch = torch.from_numpy(G_np).to(self.device)
+            del G_np
+            gc.collect()
+            
+            G_torch.diagonal().add_(self.reg_p)
+            P_torch = torch.linalg.inv(G_torch)
+            del G_torch
+            
+            diag_P = torch.diagonal(P_torch)
+            W_gpu = -P_torch / (diag_P.reshape(1, -1) + self.eps)
+            W_gpu.diagonal().zero_()
+            del P_torch
+            
+            # 5. 아이템 정규화 (GPU)
+            item_power = torch.from_numpy(np.power(item_counts + self.eps, -alpha)).to(self.device).float()
+            self.weight_matrix = W_gpu * (1.0 / (item_power + self.eps)).reshape(-1, 1) * item_power.reshape(1, -1)
+            self.weight_matrix.diagonal().zero_()
+            del W_gpu, item_power
+        else:
+            print("  inverting matrix (CPU)...")
+            G_np[np.diag_indices(self.n_items)] += self.reg_p
+            P = np.linalg.inv(G_np)
+            del G_np
+            gc.collect()
+            
+            diag_P = np.diag(P)
+            W = -P / (diag_P.reshape(1, -1) + self.eps)
+            np.fill_diagonal(W, 0)
+            del P
+            
+            # 5. 아이템 정규화 (CPU)
+            item_power = np.power(item_counts + self.eps, -alpha)
+            W = W * (1.0 / (item_power + self.eps)).reshape(-1, 1) * item_power.reshape(1, -1)
+            np.fill_diagonal(W, 0)
+
+            self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)
+            del W, item_power
+
+        gc.collect()
+        if 'cuda' in str(self.device):
+            torch.cuda.empty_cache()
         print("EASE_DAN fitting complete.")
 
     def forward(self, user_indices):
@@ -133,7 +173,7 @@ class DLAE_DAN(BaseModel):
         self.weight_matrix = None
 
     def fit(self, data_loader):
-        print(f"Fitting DLAE_DAN (reg_p={self.reg_p}, p={self.dropout_p}) on CPU...")
+        print(f"Fitting DLAE_DAN (reg_p={self.reg_p}, p={self.dropout_p}) on {self.device}...")
         X_sp = get_train_matrix_scipy(data_loader)
         self.train_matrix_cpu = X_sp.tocsr() # Hybrid inference
 
@@ -152,26 +192,50 @@ class DLAE_DAN(BaseModel):
         print(f"  Gini={gini:.4f}, α={alpha:.4f}, β={beta:.4f}")
 
         # 1. 유저 정규화
-        print("  computing gram matrix with user normalization (CPU)...")
+        print("  computing gram matrix with user normalization (CPU Sparse)...")
         X_T_weighted = X_sp.multiply(np.power(user_counts + self.eps, -beta).reshape(-1, 1)).T
-        G_dan = X_T_weighted.dot(X_sp).toarray().astype(np.float32)
+        G_dan_np = X_T_weighted.dot(X_sp).toarray().astype(np.float32)
+        
+        del X_T_weighted
+        gc.collect()
 
         # 2. DLAE Dropout 규제
         p_val = min(self.dropout_p, 0.99)
-        lmbda_eff = self.reg_p + (p_val / (1.0 - p_val + self.eps)) * item_counts
+        lmbda_eff_np = self.reg_p + (p_val / (1.0 - p_val + self.eps)) * item_counts
         
-        A = G_dan.copy()
-        A[np.diag_indices(self.n_items)] += lmbda_eff
-        
-        print("  solving linear system on CPU...")
-        W = np.linalg.solve(A, G_dan)
-        
-        # 3. 아이템 정규화 후처리
-        item_power = np.power(item_counts + self.eps, -alpha)
-        W = W * (1.0 / (item_power + self.eps)).reshape(-1, 1) * item_power.reshape(1, -1)
-        np.fill_diagonal(W, 0)
+        if 'cuda' in str(self.device) and G_dan_np.shape[0] < 20000:
+            print("  solving linear system (GPU)...")
+            G_rhs = torch.from_numpy(G_dan_np).to(self.device)
+            G_lhs = G_rhs.clone()
+            G_lhs.diagonal().add_(torch.from_numpy(lmbda_eff_np).to(self.device).float())
+            
+            W_gpu = torch.linalg.solve(G_lhs, G_rhs)
+            del G_lhs, G_rhs, G_dan_np
+            
+            # 3. 아이템 정규화 후처리
+            item_power = torch.from_numpy(np.power(item_counts + self.eps, -alpha)).to(self.device).float()
+            self.weight_matrix = W_gpu * (1.0 / (item_power + self.eps)).reshape(-1, 1) * item_power.reshape(1, -1)
+            self.weight_matrix.diagonal().zero_()
+            del W_gpu, item_power
+        else:
+            print("  solving linear system (CPU)...")
+            G_lhs = G_dan_np.copy()
+            G_lhs[np.diag_indices(self.n_items)] += lmbda_eff_np
+            
+            W = np.linalg.solve(G_lhs, G_dan_np)
+            del G_lhs, G_dan_np
+            
+            # 3. 아이템 정규화 후처리
+            item_power = np.power(item_counts + self.eps, -alpha)
+            W = W * (1.0 / (item_power + self.eps)).reshape(-1, 1) * item_power.reshape(1, -1)
+            np.fill_diagonal(W, 0)
 
-        self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)
+            self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)
+            del W, item_power
+
+        gc.collect()
+        if 'cuda' in str(self.device):
+            torch.cuda.empty_cache()
         print("DLAE_DAN fitting complete.")
 
     def forward(self, user_indices):

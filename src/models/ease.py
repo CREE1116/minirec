@@ -19,16 +19,18 @@ class EASE(BaseModel):
         self.train_matrix_cpu = X_sp.tocsr() # Store on CPU for hybrid inference
 
         print("  computing gram matrix (CPU)...")
-        G_np = compute_gram_matrix(X_sp, data_loader)
+        # Ensure result is float32
+        G_np = compute_gram_matrix(X_sp, data_loader).astype(np.float32)
         
-        print("  inverting matrix (CPU)...")
+        print("  inverting matrix (CPU NumPy float32)...")
         G_np[np.diag_indices_from(G_np)] += self.reg_lambda
-        P_np = np.linalg.inv(G_np)
+        P_np = np.linalg.inv(G_np).astype(np.float32)
         del G_np
         gc.collect()
         
-        diag_P = np.diag(P_np)
-        B_np = -P_np / (diag_P + 1e-12)
+        diag_P = np.diag(P_np).astype(np.float32)
+        # Use float32 epsilon to prevent promotion to float64
+        B_np = (-P_np / (diag_P + np.float32(1e-12))).astype(np.float32)
         np.fill_diagonal(B_np, 0)
         
         self.weight_matrix = torch.tensor(B_np, dtype=torch.float32, device=self.device)

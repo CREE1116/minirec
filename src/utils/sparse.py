@@ -3,7 +3,7 @@ from scipy import sparse
 import torch
 import gc
 
-# Global cache to store pre-computed matrices across HPO trials
+# Global cache to store ONLY sparse matrices (they are small)
 _GLOBAL_SPARSE_CACHE = {}
 
 def clear_sparse_cache():
@@ -31,58 +31,27 @@ def get_train_matrix_scipy(data_loader):
     _GLOBAL_SPARSE_CACHE[cache_key] = X
     return X
 
-def compute_gram_matrix(X, data_loader=None, weights=None, item_weights=None, block_size=4000):
+def compute_gram_matrix(X, data_loader=None, weights=None, item_weights=None):
     """
-    Computes G = (D_i) X.T @ diag(W_u) @ X (D_i) as a DENSE float32 matrix.
-    Uses Block-wise computation to avoid SciPy's sparse-sparse product memory explosion (83GB peak).
-    
-    Memory overhead: Final Dense G (8.3GB) + 2x Small Blocks (~1GB) = ~10GB Max.
+    Simplest possible Gram Matrix construction (Direct like CLAE).
+    Avoids hidden sparse-sparse copies.
     """
-    dataset_name = getattr(data_loader, 'dataset_name', 'default') if data_loader else 'unknown'
-    n_users, n_items = X.shape
-    
-    print(f"[SparseUtil] Computing Block-wise Dense Gram for {dataset_name} ({n_items} items) on CPU (No Caching)...")
-    
-    # 2. Prepare Result Matrix (Pre-allocate 8.3GB for float32)
-    G = np.zeros((n_items, n_items), dtype=np.float32)
-    
-    # Efficient Slicing requires CSC
-    X_csc = X.tocsc()
-    # Transpose for fast Sparse-Dense multiplication (CSR @ Dense is optimized)
-    X_T_csr = X_csc.T.tocsr()
-    
-    # Force weights to float32
     if weights is not None:
-        weights = weights.astype(np.float32).reshape(-1, 1)
+        # X_weighted = diag(sqrt(W)) @ X
+        # We perform multiplication without creating another full sparse object if possible
+        X = X.multiply(np.sqrt(weights).reshape(-1, 1).astype(np.float32))
+    
+    print(f"  [SparseUtil] Sparse dot product (X.T @ X)...")
+    G_sp = X.T.dot(X)
+    
+    print(f"  [SparseUtil] Converting to Dense float32...")
+    # [Critical] Single direct allocation
+    G = G_sp.toarray().astype(np.float32)
+    del G_sp
+    
     if item_weights is not None:
         item_weights = item_weights.astype(np.float32)
-
-    # 3. Block-wise filling (This avoids 83GB peak)
-    for start in range(0, n_items, block_size):
-        end = min(start + block_size, n_items)
+        G *= item_weights[:, np.newaxis]
+        G *= item_weights[np.newaxis, :]
         
-        # [Critical] Convert to float32 BEFORE toarray to save 50% memory in temporary block
-        X_block = X_csc[:, start:end].astype(np.float32).toarray()
-
-        # Apply User Weights (Propensity/Adaptive)
-        if weights is not None:
-            X_block *= weights
-
-        # G_block = X.T @ X_block
-        G_block = (X_T_csr @ X_block).astype(np.float32)
-
-        # Apply Item Weights (Normalization)
-        if item_weights is not None:
-            G_block *= item_weights[:, np.newaxis] 
-            G_block *= item_weights[start:end]     
-
-        G[:, start:end] = G_block
-
-        del X_block, G_block
-        if start % (block_size * 4) == 0:
-            gc.collect()
-
-        print(f"[SparseUtil] Dense Gram computation complete. Peak RAM used during calc: ~{10 + (n_items*n_users*4/1e9):.1f}GB")
-
-        # [Critical] DO NOT .copy() here. Returns the 8.3GB matrix directly to save memory.
-        return G
+    return G

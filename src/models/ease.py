@@ -20,7 +20,6 @@ class EASE(BaseModel):
         G_np = compute_gram_matrix(X_sp, data_loader)
         
         print("  inverting matrix (CPU)...")
-        G_np = G_np.copy()
         G_np[np.diag_indices_from(G_np)] += self.reg_lambda
         
         P_np = np.linalg.inv(G_np)

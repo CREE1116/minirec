@@ -28,7 +28,8 @@ class DLAE(BaseModel):
         p = min(self.dropout_p, 0.99)
         dropout_penalty = (p / (1.0 - p)) * np.diag(G_np)
         
-        G_lhs = G_np.copy()
+        # G_np is already a fresh copy
+        G_lhs = G_np
         G_lhs[np.diag_indices_from(G_lhs)] += (dropout_penalty + self.reg_lambda)
         
         print("  solving linear system (CPU)...")

@@ -80,7 +80,7 @@ class BayesianOptimizer:
                 search_space[name] = [float(x) for x in points]
         return search_space
 
-    def objective(self, trial, current_seed):
+    def objective(self, trial, current_seed, data_loader=None):
         model_cfg = copy.deepcopy(self.model_cfg)
 
         if self.mode == 'grid':
@@ -110,7 +110,7 @@ class BayesianOptimizer:
                 for k in keys[:-1]: d = d.setdefault(k, {})
                 d[keys[-1]] = val
         
-        metrics = self.run_func(self.dataset_name, model_cfg, hpo_mode=True, use_test_for_hpo=self.use_test_for_hpo)
+        metrics = self.run_func(self.dataset_name, model_cfg, hpo_mode=True, use_test_for_hpo=self.use_test_for_hpo, data_loader=data_loader)
         val = metrics.get(self.metric)
         if val is None:
             for k, v in metrics.items():
@@ -132,11 +132,21 @@ class BayesianOptimizer:
         except: pass
 
     def search(self, n_trials=20):
+        from src.utils.sparse import clear_sparse_cache
+        from src.data.loader import DataLoader
+        
+        clear_sparse_cache() # New dataset/model start
+        
         all_seed_results = []
         all_best_val_scores = []
         all_best_params = []
         self._max_k = None
         
+        # Instantiate DataLoader once for this dataset
+        print(f"[HPO] Pre-loading DataLoader for {self.dataset_name}...")
+        common_data_loader = DataLoader({'dataset_name': self.dataset_name})
+        self._max_k = min(min(common_data_loader.n_users, common_data_loader.n_items) - 1, 2000)
+
         for seed in self.seeds:
             print(f"\n>>> Starting HPO ({self.mode.upper()}) for Seed: {seed}")
             seed_dir = os.path.join(self.hpo_root, f"seed_{seed}")
@@ -150,7 +160,7 @@ class BayesianOptimizer:
                 actual_n_trials = n_trials
 
             study = optuna.create_study(direction='maximize' if self.maximize else 'minimize', sampler=sampler)
-            study.optimize(lambda t: self.objective(t, seed), n_trials=actual_n_trials)
+            study.optimize(lambda t: self.objective(t, seed, data_loader=common_data_loader), n_trials=actual_n_trials)
             
             self.save_results(study, seed_dir)
             all_best_val_scores.append(study.best_value)
@@ -169,7 +179,8 @@ class BayesianOptimizer:
             
             test_metrics = self.run_func(self.dataset_name, best_model_cfg, 
                                         output_path=os.path.join(seed_dir, 'best_test_run'),
-                                        hpo_mode=False)
+                                        hpo_mode=False,
+                                        data_loader=common_data_loader)
             all_seed_results.append(test_metrics)
 
         summary = self.report_final_results(all_seed_results, all_best_val_scores, all_best_params)

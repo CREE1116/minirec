@@ -24,41 +24,48 @@ class DataLoader:
 
     def _load_and_process(self):
         print(f"[DataLoader] Loading and caching data for {self.dataset_name}...")
-        self.train_df = pd.read_csv(os.path.join(self.data_dir, 'train.csv'))
-        self.valid_df = pd.read_csv(os.path.join(self.data_dir, 'valid.csv'))
-        self.test_df = pd.read_csv(os.path.join(self.data_dir, 'test.csv'))
+        train_df = pd.read_csv(os.path.join(self.data_dir, 'train.csv'))
+        valid_df = pd.read_csv(os.path.join(self.data_dir, 'valid.csv'))
+        test_df = pd.read_csv(os.path.join(self.data_dir, 'test.csv'))
 
-        self.n_users = int(max(self.train_df['user_id'].max(), self.valid_df['user_id'].max(), self.test_df['user_id'].max()) + 1)
-        self.n_items = int(max(self.train_df['item_id'].max(), self.valid_df['item_id'].max(), self.test_df['item_id'].max()) + 1)
+        self.n_users = int(max(train_df['user_id'].max(), valid_df['user_id'].max(), test_df['user_id'].max()) + 1)
+        self.n_items = int(max(train_df['item_id'].max(), valid_df['item_id'].max(), test_df['item_id'].max()) + 1)
         
         # 1. 히스토리 캐싱 (CLAE style: list of numpy arrays)
-        # train_user_history: {user: [items]}
-        self.train_user_history = self.train_df.groupby('user_id')['item_id'].apply(list).to_dict()
-        self.eval_user_history = pd.concat([self.train_df, self.valid_df]).groupby('user_id')['item_id'].apply(list).to_dict()
+        self.train_user_history = train_df.groupby('user_id')['item_id'].apply(list).to_dict()
+        self.eval_user_history = pd.concat([train_df, valid_df]).groupby('user_id')['item_id'].apply(list).to_dict()
 
-        # 2. 정답지 캐싱 (CLAE style: list of sets for O(1) evaluation)
-        self.valid_gt_dict = self.valid_df.groupby('user_id')['item_id'].apply(set).to_dict()
-        self.test_gt_dict = self.test_df.groupby('user_id')['item_id'].apply(set).to_dict()
+        # 2. 정답지 캐싱
+        self.valid_gt_dict = valid_df.groupby('user_id')['item_id'].apply(set).to_dict()
+        self.test_gt_dict = test_df.groupby('user_id')['item_id'].apply(set).to_dict()
 
-        train_counts = self.train_df['item_id'].value_counts()
+        train_counts = train_df['item_id'].value_counts()
         self.item_popularity = train_counts.reindex(range(self.n_items), fill_value=0).sort_index().values
+
+        # 3. Memory Optimization: Store only necessary numpy arrays and delete DFs
+        self.train_users = train_df['user_id'].values.astype(np.int32)
+        self.train_items = train_df['item_id'].values.astype(np.int32)
 
         self.sampling_weights = None
         if self.config.get('train', {}).get('negative_sampling_strategy') == 'popularity':
             counts = torch.FloatTensor(self.item_popularity)
             self.sampling_weights = torch.pow(counts, self.config['train'].get('negative_sampling_alpha', 0.75))
             self.sampling_weights /= self.sampling_weights.sum()
+        
+        # Original DataFrames are no longer needed
+        del train_df, valid_df, test_df
 
     def _save_to_cache(self):
         data = {
-            'train_df': self.train_df, 'valid_df': self.valid_df, 'test_df': self.test_df,
             'n_users': self.n_users, 'n_items': self.n_items,
             'item_popularity': self.item_popularity,
             'train_user_history': self.train_user_history,
             'eval_user_history': self.eval_user_history,
             'valid_gt_dict': self.valid_gt_dict,
             'test_gt_dict': self.test_gt_dict,
-            'sampling_weights': self.sampling_weights
+            'sampling_weights': self.sampling_weights,
+            'train_users': self.train_users,
+            'train_items': self.train_items
         }
         with open(self.cache_path, 'wb') as f:
             pickle.dump(data, f)
@@ -68,11 +75,11 @@ class DataLoader:
             data = pickle.load(f)
         
         # Check if all required attributes for the new CLAE-style evaluation exist
-        required_keys = ['valid_gt_dict', 'test_gt_dict', 'train_user_history', 'eval_user_history']
+        required_keys = ['valid_gt_dict', 'test_gt_dict', 'train_user_history', 'eval_user_history', 'train_users', 'train_items']
         all_present = all(k in data for k in required_keys)
         
         if not all_present:
-            print(f"[DataLoader] Cache is outdated (missing CLAE-style dicts). Re-processing...")
+            print(f"[DataLoader] Cache is outdated. Re-processing...")
             self._load_and_process()
             self._save_to_cache()
             return
@@ -81,7 +88,7 @@ class DataLoader:
             setattr(self, k, v)
 
     def get_train_loader(self, batch_size):
-        ds = RecSysDataset(self.train_df, self.n_items, self.train_user_history, self.config.get('train', {}).get('loss_type', 'pairwise'), self.config.get('train', {}).get('num_negatives', 1), self.sampling_weights)
+        ds = RecSysDataset(self.train_users, self.train_items, self.n_items, self.train_user_history, self.config.get('train', {}).get('loss_type', 'pairwise'), self.config.get('train', {}).get('num_negatives', 1), self.sampling_weights)
         return PyTorchDataLoader(ds, batch_size=batch_size, shuffle=True, collate_fn=ds.collate_fn)
 
     def get_validation_loader(self, batch_size):
@@ -97,13 +104,13 @@ class DataLoader:
         return PyTorchDataLoader(ds, batch_size=batch_size, shuffle=False)
 
 class RecSysDataset(Dataset):
-    def __init__(self, df, n_items, user_history, loss_type, num_negatives, sampling_weights=None):
-        self.df, self.n_items, self.user_history = df, n_items, user_history
+    def __init__(self, users, items, n_items, user_history, loss_type, num_negatives, sampling_weights=None):
+        self.users, self.items = users, items
+        self.n_items, self.user_history = n_items, user_history
         self.loss_type, self.num_negatives = loss_type, num_negatives
         self.sampling_weights = sampling_weights
-        self.users, self.items = df['user_id'].values, df['item_id'].values
 
-    def __len__(self): return len(self.df)
+    def __len__(self): return len(self.users)
 
     def __getitem__(self, idx):
         return (self.users[idx], self.items[idx])

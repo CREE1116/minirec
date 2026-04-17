@@ -26,7 +26,8 @@ class LAE(BaseModel):
         
         # 2. Solve linear system
         print("  solving linear system (CPU)...")
-        A_np = G_np.copy()
+        # G_np is already a fresh copy from compute_gram_matrix
+        A_np = G_np
         A_np[np.diag_indices_from(A_np)] += self.reg_lambda
         
         try:

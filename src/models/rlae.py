@@ -21,7 +21,8 @@ class RLAE(BaseModel):
         self.train_matrix_cpu = X_sp.tocsr()
         G_np = compute_gram_matrix(X_sp, data_loader)
         
-        A = G_np.copy()
+        # G_np is already a fresh copy
+        A = G_np
         A[np.diag_indices_from(A)] += self.reg_lambda
         
         print(f"  inverting matrix on CPU...")
@@ -65,7 +66,8 @@ class RDLAE(BaseModel):
         dropout_penalty = (p / (1.0 - p)) * np.diag(G_np)
         lambda_diag = dropout_penalty + self.reg_lambda
         
-        A = G_np.copy()
+        # G_np is already a fresh copy
+        A = G_np
         A[np.diag_indices_from(A)] += lambda_diag
         
         print(f"  inverting matrix on CPU...")

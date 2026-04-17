@@ -49,9 +49,8 @@ class BaseModel(nn.Module):
 
     def get_train_matrix(self, data_loader, dtype=torch.float32):
         """Standard sparse matrix fetch (Default to GPU if possible)"""
-        train_df = data_loader.train_df
-        rows = torch.tensor(train_df['user_id'].values, dtype=torch.long)
-        cols = torch.tensor(train_df['item_id'].values, dtype=torch.long)
+        rows = torch.tensor(data_loader.train_users, dtype=torch.long)
+        cols = torch.tensor(data_loader.train_items, dtype=torch.long)
         values = torch.ones(len(rows), dtype=dtype)
         
         with torch.sparse.check_sparse_tensor_invariants(False):

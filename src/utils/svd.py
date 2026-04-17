@@ -15,8 +15,9 @@ def get_svd_cache(data_loader, k_max=None, matrix=None, cache_id="raw"):
     dataset_name = getattr(data_loader, 'dataset_name', 'default')
     
     if matrix is None:
-        train_df = data_loader.train_df
-        matrix = sp.csr_matrix((np.ones(len(train_df)), (train_df['user_id'], train_df['item_id'])), 
+        rows = data_loader.train_users
+        cols = data_loader.train_items
+        matrix = sp.csr_matrix((np.ones(len(rows)), (rows, cols)), 
                                shape=(data_loader.n_users, data_loader.n_items), dtype=np.float32)
     
     # svds는 min(shape) - 1 까지만 계산 가능

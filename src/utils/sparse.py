@@ -35,6 +35,7 @@ def get_train_matrix_scipy(data_loader):
 def compute_gram_matrix(X, data_loader=None, weights=None, item_weights=None):
     # 0. 시작하자마자 X의 타입을 체크/변경 (X가 Sparse라면 astype은 효율적입니다)
     if X.dtype != np.float32:
+        print("[SparseUtil] !!Converting input matrix to float32...")
         X = X.astype(np.float32)
 
     # 1. User weighting
@@ -46,6 +47,7 @@ def compute_gram_matrix(X, data_loader=None, weights=None, item_weights=None):
     # 2. Gram matrix 계산 및 즉시 타입 확인
     G_sp = X.T.dot(X)
     if G_sp.dtype != np.float32:
+        print("[SparseUtil] !!Converting input matrix to float32...")
         G_sp = G_sp.astype(np.float32)
     
     # 3. Dense 변환 (7.5GB 할당)

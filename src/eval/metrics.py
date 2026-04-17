@@ -8,50 +8,28 @@ from collections import defaultdict
 _LOG2 = np.log2(np.arange(2, 10002, dtype=np.float64))
 _LOG2_RECIP = (1.0 / _LOG2).astype(np.float32)
 
-def get_gini_index(counts):
-    """CPU-based efficient Gini Index"""
-    if counts.sum() == 0: return 0.0
-    n = len(counts)
-    values = np.sort(counts)
-    idx = np.arange(1, n + 1)
-    gini = np.sum((2 * idx - n - 1) * values) / (n * values.sum() + 1e-12)
-    return float(gini)
-
 def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
                    user_history_sp, test_gt_sp, item_popularity=None):
     n_users, n_items = test_gt_sp.shape
     max_k = max(top_k_list)
     
-    # 1. Pre-process Ground Truth into Sets for O(1) lookup
-    # This is done once per evaluation call.
-    gt_coo = test_gt_sp.to("cpu").coalesce()
-    gt_indices = gt_coo.indices().numpy()
-    gt_dict = defaultdict(set)
-    for u, i in zip(gt_indices[0], gt_indices[1]):
-        gt_dict[u].add(i)
-    
-    # 2. Pre-process User History for masking on GPU
+    # [Optimization] Pre-calculate masks on the target DEVICE once per evaluation call.
+    # This prevents repeated device transfers in the loop.
     hist_coo = user_history_sp.coalesce().to(device)
-    hist_indices = hist_coo.indices()
+    hist_indices = hist_coo.indices() # (2, nnz)
     
-    # 3. Item Grouping (Optional)
-    needed_groups = [g for g in ['Head', 'Mid', 'Tail'] if any(g in m for m in metrics_list)]
-    item_to_group = None
-    if item_popularity is not None and needed_groups:
-        # Simple top-20% as head
-        sorted_items = np.argsort(item_popularity)[::-1]
-        head_idx = set(sorted_items[:int(n_items * 0.2)])
-        item_to_group = np.full(n_items, 2) # Default as Tail (2)
-        for idx in head_idx: item_to_group[idx] = 0 # Head as 0
-        # Mid omitted for simplicity or can be added similarly
-
+    gt_coo = test_gt_sp.coalesce().to(device)
+    gt_indices = gt_coo.indices() # (2, nnz)
+    
+    # Linear Index for vectorized hit detection: user_id * n_items + item_id
+    gt_linear_idx = gt_indices[0] * n_items + gt_indices[1]
+    
     sums = defaultdict(float)
     counts = defaultdict(float)
-    all_rec_counts = {k: np.zeros(n_items) for k in top_k_list}
 
     batch_size = test_loader.batch_size
     with torch.no_grad():
-        for start in tqdm(range(0, n_users, batch_size), desc="Eval (Optimized)", file=sys.stdout):
+        for start in tqdm(range(0, n_users, batch_size), desc="Eval (Vectorized)", file=sys.stdout):
             end = min(start + batch_size, n_users)
             u_ids = torch.arange(start, end, device=device)
             B = end - start
@@ -59,46 +37,47 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
             # [GPU] 1. Inference
             scores = model.forward(u_ids) # (B, I)
 
-            # [GPU] 2. Efficient Masking
-            # Filter global history indices to current batch
-            mask = (hist_indices[0] >= start) & (hist_indices[0] < end)
-            if mask.any():
-                scores[hist_indices[0, mask] - start, hist_indices[1, mask]] = -1e10
+            # [GPU] 2. Vectorized Masking (Already on device, no copy!)
+            # Filter history entries belonging to current batch
+            h_mask = (hist_indices[0] >= start) & (hist_indices[0] < end)
+            if h_mask.any():
+                scores[hist_indices[0, h_mask] - start, hist_indices[1, h_mask]] = -1e10
 
-            # [GPU] 3. Top-K extraction
-            _, top_idx_gpu = torch.topk(scores, k=max_k, dim=1)
+            # [GPU] 3. Top-K and Hit detection
+            _, top_idx = torch.topk(scores, k=max_k, dim=1)
             
-            # [Transfer] Move only result to CPU
-            top_idx = top_idx_gpu.cpu().numpy() # (B, max_k)
+            # Linear indices for recommendations
+            u_idx_expanded = torch.arange(start, end, device=device).unsqueeze(1).expand(-1, max_k)
+            top_linear_idx = u_idx_expanded * n_items + top_idx
             
-            # [CPU] 4. Metric Calculation (Fast loop with Sets)
-            for i in range(B):
-                u_global = start + i
-                u_gt = gt_dict.get(u_global, set())
-                if not u_gt:
-                    continue
+            # [GPU] Vectorized isin - Extremely fast on GPU
+            hit_mat = torch.isin(top_linear_idx, gt_linear_idx) # (B, max_k)
+            
+            # [GPU] 4. GT sizes for Recall/NDCG
+            b_gt_mask = (gt_indices[0] >= start) & (gt_indices[0] < end)
+            gt_sizes = torch.zeros(B, device=device)
+            if b_gt_mask.any():
+                gt_sizes.scatter_add_(0, gt_indices[0, b_gt_mask] - start, torch.ones(b_gt_mask.sum(), device=device))
+
+            # [GPU] 5. Metric calculation in batch
+            for k in top_k_list:
+                hk = hit_mat[:, :k].float()
+                hit_sum = hk.sum(dim=1)
                 
-                # Pre-calculate hits for all K
-                hits = np.array([1 if item in u_gt else 0 for item in top_idx[i]])
-                gt_size = len(u_gt)
-                
-                for k in top_k_list:
-                    k_hits = hits[:k]
-                    hit_count = np.sum(k_hits)
-                    
-                    if 'Recall' in metrics_list:
-                        sums[f'Recall@{k}'] += hit_count / min(k, gt_size)
-                    if 'HitRate' in metrics_list:
-                        sums[f'HitRate@{k}'] += 1 if hit_count > 0 else 0
-                    if 'NDCG' in metrics_list:
-                        dcg = np.sum(k_hits * _LOG2_RECIP[:k])
-                        idcg = np.sum(_LOG2_RECIP[:min(k, gt_size)])
-                        sums[f'NDCG@{k}'] += dcg / idcg
-                    
-                    # Recommendation counts for Coverage/Gini
-                    all_rec_counts[k][top_idx[i, :k]] += 1
-                
-                counts['total'] += 1 # Only count users with GT
+                if 'Recall' in metrics_list:
+                    sums[f'Recall@{k}'] += (hit_sum / gt_sizes.clamp(min=1)).sum().item()
+                if 'HitRate' in metrics_list:
+                    sums[f'HitRate@{k}'] += (hit_sum > 0).float().sum().item()
+                if 'NDCG' in metrics_list:
+                    log2_w = torch.tensor(_LOG2_RECIP[:k], device=device)
+                    dcg = (hk * log2_w).sum(dim=1)
+                    # Ideal DCG calculation
+                    idcg = torch.zeros(B, device=device)
+                    for i in range(B):
+                        idcg[i] = _LOG2_RECIP[:int(min(k, gt_sizes[i].item()))].sum()
+                    sums[f'NDCG@{k}'] += (dcg / idcg.clamp(min=1e-8)).sum().item()
+            
+            counts['total'] += B
 
     # Final Average
     final = {}
@@ -107,31 +86,18 @@ def _evaluate_full(model, test_loader, top_k_list, metrics_list, device,
         for m in ['HitRate', 'Recall', 'NDCG']:
             key = f'{m}@{k}'
             final[key] = sums[key] / n
-        
-        if 'Coverage' in metrics_list:
-            final[f'Coverage@{k}'] = np.mean(all_rec_counts[k] > 0)
-        if 'GiniIndex' in metrics_list:
-            final[f'GiniIndex@{k}'] = get_gini_index(all_rec_counts[k])
-            
     return final
 
 def evaluate_metrics(model, data_loader, eval_config, device, test_loader, is_final=False):
     history_sp = data_loader.sp_train_valid if is_final else data_loader.sp_train
     test_gt_sp = data_loader.sp_test_gt if is_final else data_loader.sp_valid_gt
 
-    metrics = evaluate_metrics_optimized(
+    # Called by trainer
+    return _evaluate_full(
         model, test_loader, 
         top_k_list=eval_config.get('top_k', [10, 20]), 
         metrics_list=eval_config.get('metrics', ['Recall', 'NDCG']), 
         device=device, 
         user_history_sp=history_sp, 
-        test_gt_sp=test_gt_sp, 
-        item_popularity=data_loader.item_popularity
+        test_gt_sp=test_gt_sp
     )
-    return metrics
-
-def evaluate_metrics_optimized(model, test_loader, top_k_list, metrics_list, device,
-                               user_history_sp, test_gt_sp, item_popularity=None):
-    # This is the entry point called by Trainer
-    return _evaluate_full(model, test_loader, top_k_list, metrics_list, device, 
-                          user_history_sp, test_gt_sp, item_popularity)

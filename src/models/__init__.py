@@ -18,6 +18,7 @@ from .dr_jl import DR_JL
 from .co_occurrence import CoOccurrence
 from .pmi_aspire import PMIAspire   
 from .pmi_lae import PMILAE
+from .adaptive_aspire import AdaptiveAspire
 
 MODEL_REGISTRY = {
     'ease': EASE,
@@ -42,6 +43,7 @@ MODEL_REGISTRY = {
     'co_occurrence': CoOccurrence,
     'pmi_lae': PMILAE,
     'pmi_aspire': PMIAspire,
+    'adaptive_aspire': AdaptiveAspire,
 }
 
 def get_model(model_name, config, data_loader):

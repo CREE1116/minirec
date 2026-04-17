@@ -1,6 +1,5 @@
 import torch
 import numpy as np
-import scipy.linalg as la
 import gc
 from .base import BaseModel
 from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
@@ -8,7 +7,7 @@ from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
 class IPS_LAE(BaseModel):
     """
     IPS_LAE: Inverse Propensity Scored Linear AutoEncoder
-    Optimized with Hybrid CPU/GPU inference and Strict Minimal Memory.
+    Optimized with NumPy inv and Strict float32.
     """
     def __init__(self, config, data_loader):
         super().__init__(config, data_loader)
@@ -31,46 +30,42 @@ class IPS_LAE(BaseModel):
             p = np.ones_like(pop, dtype=np.float32)
         
         inv_p = (np.float32(1.0) / (p + self.eps)).astype(np.float32)
-        del pop, p
         return torch.tensor(inv_p, dtype=torch.float32, device=self.device)
 
     def fit(self, data_loader):
-        print(f"Fitting IPS_LAE (lambda={self.reg_lambda}) on CPU with Strict minimal memory...")
+        print(f"Fitting IPS_LAE (lambda={self.reg_lambda}) on CPU using NumPy inv...")
         
         X_sp = get_train_matrix_scipy(data_loader)
         self.train_matrix_cpu = X_sp.tocsr()
 
         print("  computing gram matrix (CPU float32)...")
-        # compute_gram_matrix now returns the 8.3GB matrix directly (no copy)
         G_np = compute_gram_matrix(X_sp, data_loader)
         gc.collect()
         
-        print("  inverting matrix (CPU In-place float32)...")
+        print("  inverting matrix (NumPy float32)...")
         G_np[np.diag_indices_from(G_np)] += self.reg_lambda
         
-        # P_np will replace G_np in memory if LAPACK supports it
-        P_np = la.inv(G_np, overwrite_a=True)
+        P_np = np.linalg.inv(G_np).astype(np.float32)
         del G_np 
         gc.collect()
         
         diag_P = np.diag(P_np).astype(np.float32)
-        # B_np calculation
         B_np = (-P_np / (diag_P + self.eps)).astype(np.float32)
         np.fill_diagonal(B_np, 0)
         del P_np, diag_P
         gc.collect()
         
         # Move to GPU
-        self.weight_matrix = torch.tensor(B_np, dtype=torch.float32, device=self.device)
+        B_gpu = torch.tensor(B_np, dtype=torch.float32, device=self.device)
         del B_np 
         gc.collect()
         
-        # 3. Apply IPS weighting on GPU
+        # Apply IPS weighting
         inv_p = self._compute_inv_propensity(X_sp)
-        self.weight_matrix *= inv_p.view(1, -1)
+        self.weight_matrix = B_gpu * inv_p.view(1, -1)
         self.weight_matrix.diagonal().zero_()
         
-        del inv_p
+        del B_gpu, inv_p
         gc.collect()
         
         if 'cuda' in str(self.device):

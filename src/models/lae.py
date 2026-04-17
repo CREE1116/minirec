@@ -1,6 +1,5 @@
 import torch
 import numpy as np
-import scipy.linalg as la
 import gc
 from .base import BaseModel
 from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
@@ -17,38 +16,34 @@ class LAE(BaseModel):
         self.weight_matrix = None
 
     def fit(self, data_loader):
-        print(f"Fitting LAE (lambda={self.reg_lambda}) on CPU with Strict minimal memory...")
+        print(f"Fitting LAE (lambda={self.reg_lambda}) on CPU using NumPy inv...")
         
-        # 1. Load data onto CPU
+        # 1. Load data
         X_sp = get_train_matrix_scipy(data_loader)
         self.train_matrix_cpu = X_sp.tocsr()
 
         print("  computing gram matrix (CPU float32)...")
-        G_np = compute_gram_matrix(X_sp, data_loader).astype(np.float32)
+        G_np = compute_gram_matrix(X_sp, data_loader)
         gc.collect()
         
-        # 2. Solve linear system on CPU
-        print("  solving linear system (CPU In-place float32)...")
-        A_np = G_np
+        # 2. Solve via Inverse: W = inv(G + lambda*I) @ G
+        print("  inverting matrix (NumPy float32)...")
+        A_np = G_np.astype(np.float32)
         A_np[np.diag_indices_from(A_np)] += self.reg_lambda
         
-        # G_np를 보존해야 하므로, compute_gram_matrix에서 하나 더 가져옴 (RHS 용)
-        # 하지만 메모리 아끼기 위해 A_np 수정 전의 G를 다시 확보하는 대신...
-        # G_orig = A_np - lambda*I 임을 이용할 수도 있으나, 안전하게 다시 불러옴 (Sparse 캐시 활용)
-        G_orig = compute_gram_matrix(X_sp, data_loader).astype(np.float32) 
+        # inv(A)
+        A_inv = np.linalg.inv(A_np).astype(np.float32)
+        del A_np
         gc.collect()
-
-        try:
-            # overwrite_a/b=True saves 16.6GB RAM
-            W_np = la.solve(A_np, G_orig, overwrite_a=True, overwrite_b=True).astype(np.float32)
-        except (np.linalg.LinAlgError, la.LinAlgError):
-            print("[Warning] Singular matrix, using stronger regularization.")
-            A_np[np.diag_indices_from(A_np)] += np.float32(1e-4)
-            W_np = la.solve(A_np, G_orig, overwrite_a=True, overwrite_b=True).astype(np.float32)
+        
+        # W = A_inv @ G
+        print("  finalizing weight matrix (matmul)...")
+        G_orig = compute_gram_matrix(X_sp, data_loader).astype(np.float32)
+        W_np = (A_inv @ G_orig).astype(np.float32)
         
         # 3. Transfer to GPU and clean up
         self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)
-        del A_np, G_orig, W_np, G_np
+        del A_inv, G_orig, W_np, G_np
         gc.collect()
 
         if 'cuda' in str(self.device):

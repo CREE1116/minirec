@@ -1,6 +1,5 @@
 import torch
 import numpy as np
-import scipy.linalg as la
 import gc
 from .base import BaseModel
 from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
@@ -8,7 +7,7 @@ from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
 class DLAE(BaseModel):
     """
     DLAE: Denoising Linear AutoEncoder
-    Optimized with Hybrid CPU/GPU inference.
+    Optimized with NumPy inv and Strict float32.
     """
     def __init__(self, config, data_loader):
         super().__init__(config, data_loader)
@@ -17,33 +16,35 @@ class DLAE(BaseModel):
         self.weight_matrix = None
 
     def fit(self, data_loader):
-        print(f"Fitting DLAE (p={self.dropout_p}, lambda={self.reg_lambda}) on CPU...")
+        print(f"Fitting DLAE (p={self.dropout_p}) on CPU using NumPy inv...")
         
-        # 1. Load data onto CPU
+        # 1. Load data
         X_sp = get_train_matrix_scipy(data_loader)
         self.train_matrix_cpu = X_sp.tocsr()
 
         print("  computing gram matrix (CPU float32)...")
-        G_np = compute_gram_matrix(X_sp, data_loader).astype(np.float32)
+        G_np = compute_gram_matrix(X_sp, data_loader)
+        gc.collect()
         
-        # 2. Add Dropout Penalty: diag += (p/(1-p)) * G_jj
+        # 2. Add Dropout Penalty
         p = self.dropout_p
         dropout_penalty = ((p / (np.float32(1.0) - p)) * np.diag(G_np)).astype(np.float32)
         
-        # 3. Solve linear system on CPU (NumPy float32)
-        print("  solving linear system (CPU In-place float32)...")
-        # G_np is already a fresh copy
-        G_lhs = G_np
+        # 3. Solve via Inverse: W = inv(G + penalty + lambda*I) @ G
+        print("  inverting matrix (NumPy float32)...")
+        G_lhs = G_np.astype(np.float32)
         G_lhs[np.diag_indices_from(G_lhs)] += (dropout_penalty + self.reg_lambda)
         
-        # G_orig 확보 (RHS 용)
-        G_orig = compute_gram_matrix(X_sp, data_loader).astype(np.float32)
+        A_inv = np.linalg.inv(G_lhs).astype(np.float32)
+        del G_lhs
+        gc.collect()
         
-        # la.solve with overwrite flags saves 2 full matrix copies
-        W_np = la.solve(G_lhs, G_orig, overwrite_a=True, overwrite_b=True).astype(np.float32)
+        print("  finalizing weight matrix (matmul)...")
+        # G_np is already the fresh original G from compute_gram_matrix
+        W_np = (A_inv @ G_np).astype(np.float32)
         
         self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)
-        del G_lhs, G_orig, W_np, dropout_penalty
+        del A_inv, W_np, G_np, dropout_penalty
 
         gc.collect()
         if 'cuda' in str(self.device):

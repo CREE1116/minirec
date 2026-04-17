@@ -1,7 +1,6 @@
 import torch
 import numpy as np
 import scipy.sparse as sp
-import scipy.linalg as la
 import gc
 from .base import BaseModel
 from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
@@ -13,7 +12,7 @@ class EASE(BaseModel):
         self.weight_matrix = None
 
     def fit(self, data_loader):
-        print(f"Fitting EASE (lambda={self.reg_lambda}) on CPU...")
+        print(f"Fitting EASE (lambda={self.reg_lambda}) on CPU using NumPy inv...")
         
         X_sp = get_train_matrix_scipy(data_loader)
         self.train_matrix_cpu = X_sp.tocsr()
@@ -21,11 +20,11 @@ class EASE(BaseModel):
         print("  computing gram matrix (CPU float32)...")
         G_np = compute_gram_matrix(X_sp, data_loader).astype(np.float32)
         
-        print("  inverting matrix (CPU In-place NumPy float32)...")
+        print("  inverting matrix (NumPy float32)...")
         G_np[np.diag_indices_from(G_np)] += self.reg_lambda
         
-        # scipy.linalg.inv with overwrite_a=True saves 1 full matrix copy (8.3GB)
-        P_np = la.inv(G_np, overwrite_a=True).astype(np.float32)
+        # Use standard np.linalg.inv
+        P_np = np.linalg.inv(G_np).astype(np.float32)
         del G_np
         gc.collect()
         
@@ -42,7 +41,6 @@ class EASE(BaseModel):
         print("EASE fitting complete.")
 
     def forward(self, user_indices):
-        """Memory-efficient hybrid inference"""
         return self._get_batch_ratings(user_indices, self.weight_matrix)
 
     def calc_loss(self, batch_data):

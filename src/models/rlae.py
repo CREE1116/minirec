@@ -1,6 +1,5 @@
 import torch
 import numpy as np
-import scipy.linalg as la
 import gc
 from .base import BaseModel
 from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
@@ -8,7 +7,7 @@ from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
 class RLAE(BaseModel):
     """
     Relaxed Linear AutoEncoder (RLAE)
-    - Optimization: min ||X - XB||^2 + lambda ||B||^2  s.t.  diag(B) <= b
+    Optimized with NumPy inv and Strict float32.
     """
     def __init__(self, config, data_loader):
         super().__init__(config, data_loader)
@@ -18,7 +17,7 @@ class RLAE(BaseModel):
         self.weight_matrix = None
 
     def fit(self, data_loader):
-        print(f"Fitting RLAE (lambda={self.reg_lambda}, b={self.b}) on CPU...")
+        print(f"Fitting RLAE (lambda={self.reg_lambda}, b={self.b}) on CPU using NumPy inv...")
         X_sp = get_train_matrix_scipy(data_loader)
         self.train_matrix_cpu = X_sp.tocsr()
         G_np = compute_gram_matrix(X_sp, data_loader).astype(np.float32)
@@ -27,8 +26,8 @@ class RLAE(BaseModel):
         A = G_np
         A[np.diag_indices_from(A)] += self.reg_lambda
         
-        print(f"  inverting matrix on CPU (In-place NumPy float32)...")
-        P = la.inv(A, overwrite_a=True).astype(np.float32)
+        print(f"  inverting matrix (NumPy float32)...")
+        P = np.linalg.inv(A).astype(np.float32)
         del A
         gc.collect()
         
@@ -66,7 +65,7 @@ class RDLAE(BaseModel):
         self.weight_matrix = None
 
     def fit(self, data_loader):
-        print(f"Fitting RDLAE (lambda={self.reg_lambda}, p={self.dropout_p}, b={self.b}) on CPU...")
+        print(f"Fitting RDLAE (lambda={self.reg_lambda}) on CPU using NumPy inv...")
         X_sp = get_train_matrix_scipy(data_loader)
         self.train_matrix_cpu = X_sp.tocsr()
         G_np = compute_gram_matrix(X_sp, data_loader).astype(np.float32)
@@ -79,8 +78,8 @@ class RDLAE(BaseModel):
         A = G_np
         A[np.diag_indices_from(A)] += lambda_diag_np
         
-        print(f"  inverting matrix on CPU (In-place NumPy float32)...")
-        P = la.inv(A, overwrite_a=True).astype(np.float32)
+        print(f"  inverting matrix (NumPy float32)...")
+        P = np.linalg.inv(A).astype(np.float32)
         del A
         gc.collect()
         

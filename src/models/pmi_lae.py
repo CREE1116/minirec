@@ -1,7 +1,6 @@
 import numpy as np
 import torch
 import scipy.sparse as sp
-import scipy.linalg as la
 import gc
 from .base import BaseModel
 from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
@@ -9,7 +8,7 @@ from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
 class PMILAE(BaseModel):
     """
     PMI-LAE: Linear AutoEncoder on top of a PPMI (Positive Pointwise Mutual Information) Kernel.
-    Uses strict EASE closed-form solution with In-place float32 optimization.
+    Uses strict EASE closed-form solution with NumPy inv and float32 optimization.
     """
 
     def __init__(self, config, data_loader):
@@ -20,7 +19,7 @@ class PMILAE(BaseModel):
         self.weight_matrix = None
 
     def fit(self, data_loader):
-        print(f"Fitting PMI-LAE (alpha={self.alpha}, lambda={self.reg_lambda}) on CPU with Strict float32...")
+        print(f"Fitting PMI-LAE (alpha={self.alpha}, lambda={self.reg_lambda}) on CPU using NumPy inv...")
 
         # 1. Load sparse matrix
         X_sp = get_train_matrix_scipy(data_loader)
@@ -43,7 +42,6 @@ class PMILAE(BaseModel):
         P_ij = (v / (total + self.eps)).astype(np.float32)
         denom = ((P_i[i] * np.power(P_i[j], self.alpha)) + self.eps).astype(np.float32)
         
-        # Prevent promotion during log
         pmi_values = (np.log(P_ij + self.eps) - np.log(denom)).astype(np.float32)
         pmi_values = np.maximum(pmi_values, 0).astype(np.float32)
         
@@ -56,12 +54,11 @@ class PMILAE(BaseModel):
         del G, item_deg, P_i, i, j, v, P_ij, denom, pmi_values, K_sp
         gc.collect()
         
-        # 5. Solve Strict EASE on top of PPMI Kernel (CPU In-place float32)
-        print("  Solving Strict EASE closed-form (CPU In-place NumPy float32)...")
-        # G_np is already a fresh copy
+        # 5. Solve Strict EASE on top of PPMI Kernel (NumPy inv)
+        print("  Solving Strict EASE closed-form (NumPy float32)...")
         K_np[np.diag_indices_from(K_np)] += self.reg_lambda
         
-        P_inv = la.inv(K_np, overwrite_a=True).astype(np.float32)
+        P_inv = np.linalg.inv(K_np).astype(np.float32)
         del K_np
         gc.collect()
 

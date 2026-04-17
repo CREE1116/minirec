@@ -54,7 +54,6 @@ def edge_homophily(X: sparse.csr_matrix,
 class EASE_DAN(BaseModel):
     """
     EASE with Data-Adaptive Normalization (DAN)
-    Pure EASE structure with constant regularization.
     """
 
     def __init__(self, config, data_loader):
@@ -66,23 +65,21 @@ class EASE_DAN(BaseModel):
         self.max_items_hom     = config['model'].get('max_items_homophily', 5000)
         self.eps               = 1e-12
         self.weight_matrix = None
-        self.train_matrix_scipy = None
 
     def fit(self, data_loader):
         print(f"Fitting EASE_DAN (reg_p={self.reg_p}) on CPU...")
-        X = get_train_matrix_scipy(data_loader)
-        self.train_matrix_scipy = X
+        X_sp = get_train_matrix_scipy(data_loader)
+        self.train_matrix_cpu = X_sp.tocsr() # Hybrid inference
 
-        item_counts = np.array(X.sum(axis=0)).flatten().astype(np.float32)
-        user_counts = np.array(X.sum(axis=1)).flatten().astype(np.float32)
+        item_counts = np.array(X_sp.sum(axis=0)).flatten().astype(np.float32)
+        user_counts = np.array(X_sp.sum(axis=1)).flatten().astype(np.float32)
 
-        # 1. 자동 alpha (Gini), beta (Homophily) 계산
         gini = gini_coefficient(item_counts)
         alpha = self.alpha_config if self.alpha_config is not None else gini
         
         if self.beta_config is None:
             print("  computing edge homophily for beta (CPU)...")
-            beta = edge_homophily(X, self.volume_weight_exp, self.max_items_hom)
+            beta = edge_homophily(X_sp, self.volume_weight_exp, self.max_items_hom)
         else:
             beta = self.beta_config
             
@@ -90,18 +87,14 @@ class EASE_DAN(BaseModel):
 
         # 2. 유저 정규화 (X_tilde = D_U^{-β} X)
         print("  computing gram matrix with user normalization (CPU)...")
-        X_T_weighted = X.multiply(np.power(user_counts + self.eps, -beta).reshape(-1, 1)).T
-        G = X_T_weighted.dot(X).toarray().astype(np.float32)
+        X_T_weighted = X_sp.multiply(np.power(user_counts + self.eps, -beta).reshape(-1, 1)).T
+        G = X_T_weighted.dot(X_sp).toarray().astype(np.float32)
 
-        # 3. 상수 규제 (Constant Lambda)
         G[np.diag_indices(self.n_items)] += self.reg_p
         
-        # 4. EASE Closed-form Solver (I - P/diag(P))
         print("  inverting matrix on CPU...")
         P = np.linalg.inv(G)
         diag_P = np.diag(P)
-        
-        # W = -P / P_jj (off-diagonal), 0 (diagonal)
         W = -P / (diag_P.reshape(1, -1) + self.eps)
         np.fill_diagonal(W, 0)
         
@@ -110,14 +103,12 @@ class EASE_DAN(BaseModel):
         W = W * (1.0 / (item_power + self.eps)).reshape(-1, 1) * item_power.reshape(1, -1)
         np.fill_diagonal(W, 0)
 
-        # 6. Move results to Device for Forward
         self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)
-        self.train_matrix_gpu = self.get_train_matrix(data_loader)
         print("EASE_DAN fitting complete.")
 
     def forward(self, user_indices):
-        input_tensor = torch.index_select(self.train_matrix_gpu, 0, user_indices).to_dense()
-        return input_tensor @ self.weight_matrix
+        """Memory-efficient hybrid inference"""
+        return self._get_batch_ratings(user_indices, self.weight_matrix)
 
     def calc_loss(self, batch_data):
         return (torch.tensor(0.0, device=self.device),), None
@@ -128,7 +119,6 @@ class EASE_DAN(BaseModel):
 class DLAE_DAN(BaseModel):
     """
     DLAE with Data-Adaptive Normalization (DAN)
-    Full DLAE structure with adaptive dropout-based lambda.
     """
 
     def __init__(self, config, data_loader):
@@ -141,22 +131,21 @@ class DLAE_DAN(BaseModel):
         self.max_items_hom     = config['model'].get('max_items_homophily', 5000)
         self.eps               = 1e-12
         self.weight_matrix = None
-        self.train_matrix_scipy = None
 
     def fit(self, data_loader):
         print(f"Fitting DLAE_DAN (reg_p={self.reg_p}, p={self.dropout_p}) on CPU...")
-        X = get_train_matrix_scipy(data_loader)
-        self.train_matrix_scipy = X
+        X_sp = get_train_matrix_scipy(data_loader)
+        self.train_matrix_cpu = X_sp.tocsr() # Hybrid inference
 
-        item_counts = np.array(X.sum(axis=0)).flatten().astype(np.float32)
-        user_counts = np.array(X.sum(axis=1)).flatten().astype(np.float32)
+        item_counts = np.array(X_sp.sum(axis=0)).flatten().astype(np.float32)
+        user_counts = np.array(X_sp.sum(axis=1)).flatten().astype(np.float32)
 
         gini = gini_coefficient(item_counts)
         alpha = self.alpha_config if self.alpha_config is not None else gini
         
         if self.beta_config is None:
             print("  computing edge homophily for beta (CPU)...")
-            beta = edge_homophily(X, self.volume_weight_exp, self.max_items_hom)
+            beta = edge_homophily(X_sp, self.volume_weight_exp, self.max_items_hom)
         else:
             beta = self.beta_config
             
@@ -164,10 +153,10 @@ class DLAE_DAN(BaseModel):
 
         # 1. 유저 정규화
         print("  computing gram matrix with user normalization (CPU)...")
-        X_T_weighted = X.multiply(np.power(user_counts + self.eps, -beta).reshape(-1, 1)).T
-        G_dan = X_T_weighted.dot(X).toarray().astype(np.float32)
+        X_T_weighted = X_sp.multiply(np.power(user_counts + self.eps, -beta).reshape(-1, 1)).T
+        G_dan = X_T_weighted.dot(X_sp).toarray().astype(np.float32)
 
-        # 2. DLAE Dropout 규제 (Adaptive Lambda)
+        # 2. DLAE Dropout 규제
         p_val = min(self.dropout_p, 0.99)
         lmbda_eff = self.reg_p + (p_val / (1.0 - p_val + self.eps)) * item_counts
         
@@ -175,22 +164,19 @@ class DLAE_DAN(BaseModel):
         A[np.diag_indices(self.n_items)] += lmbda_eff
         
         print("  solving linear system on CPU...")
-        # DLAE standard solver: W = (G + L)^{-1} G
         W = np.linalg.solve(A, G_dan)
         
-        # 3. 아이템 정규화 후처리 (공식 버전 alpha 반영)
+        # 3. 아이템 정규화 후처리
         item_power = np.power(item_counts + self.eps, -alpha)
         W = W * (1.0 / (item_power + self.eps)).reshape(-1, 1) * item_power.reshape(1, -1)
         np.fill_diagonal(W, 0)
 
-        # 4. Move to Device
         self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)
-        self.train_matrix_gpu = self.get_train_matrix(data_loader)
         print("DLAE_DAN fitting complete.")
 
     def forward(self, user_indices):
-        input_tensor = torch.index_select(self.train_matrix_gpu, 0, user_indices).to_dense()
-        return input_tensor @ self.weight_matrix
+        """Memory-efficient hybrid inference"""
+        return self._get_batch_ratings(user_indices, self.weight_matrix)
 
     def calc_loss(self, batch_data):
         return (torch.tensor(0.0, device=self.device),), None

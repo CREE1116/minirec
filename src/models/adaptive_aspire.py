@@ -11,13 +11,21 @@ class AdaptiveAspire(BaseModel):
         self.damping_coeff = config['model'].get('damping_coeff', 3.0)
         self.eps = 1e-12
         self.weight_matrix = None
-        self.train_matrix_gpu = None
+        self.train_matrix_cpu = None # Keep large matrix on CPU
+
+    def _to_torch_sparse(self, scipy_matrix):
+        """Convert Scipy sparse matrix to Torch sparse tensor (avoiding toarray)"""
+        scipy_matrix = scipy_matrix.tocoo()
+        indices = torch.from_numpy(np.vstack((scipy_matrix.row, scipy_matrix.col)).astype(np.int64))
+        values = torch.from_numpy(scipy_matrix.data.astype(np.float32))
+        return torch.sparse_coo_tensor(indices, values, torch.Size(scipy_matrix.shape))
 
     def fit(self, data_loader):
-        print("Fitting Adaptive ASPIRE (Statistical Noise Estimation)...")
+        print("Fitting Adaptive ASPIRE (Optimized Memory)...")
 
-        # 1. Get training data as Scipy CSR
-        X_sp = get_train_matrix_scipy(data_loader) # (U, I) sparse
+        # 1. Get training data as Scipy CSR (Keep on CPU)
+        X_sp = get_train_matrix_scipy(data_loader) 
+        self.train_matrix_cpu = X_sp.tocsr() # Store for inference
         U, I = X_sp.shape
 
         # 2. Compute Proxies
@@ -31,60 +39,53 @@ class AdaptiveAspire(BaseModel):
         valid = (d_u > 1) & (d_bar_u > 1)
         gamma_star_u = np.where(valid, -np.log(p_u_proxy) / np.log(d_bar_u + self.eps), 0.0)
         
-        # --- NEW: Statistical Noise Estimation (No SVD) ---
-        # Principle: In a pure random graph (noise), Var(d_u) == mean(d_u) * (1 - density).
-        # In a structured graph (signal), Var(d_u) >> Random_Var.
-        # We estimate sigma by the ratio of 'Randomness' in the degree distribution.
-        
-        print("  Estimating noise level (sigma) using degree dispersion statistics...")
+        # 4. Statistical Noise Estimation (O(N) CPU)
         avg_d = np.mean(d_u)
         var_d = np.var(d_u)
         density = avg_d / I
-        
-        # Theoretical variance of a random (Poisson/Binomial) degree distribution
         expected_var_random = avg_d * (1 - density)
-        
-        # Noise Proxy: How much of our degree variance looks like random noise?
-        # If var_d is close to expected_var_random, it's pure noise (noise_ratio -> 1)
         noise_ratio = expected_var_random / (var_d + expected_var_random + self.eps)
-        
-        # Map this ratio to a sigma-like scale (0.0 to 0.3)
-        # This is a heuristic that performs similarly to the SVD residual std.
         sigma_est = noise_ratio * 0.5 
         
         damping_factor = max(0.1, 1.0 - self.damping_coeff * sigma_est)
+        gamma_star_u = (gamma_star_u * damping_factor).clip(0.0, 1.0)
         
-        print(f"  -> Avg Degree: {avg_d:.2f}, Var Degree: {var_d:.2f}")
-        print(f"  -> Statistical Sigma Proxy: {sigma_est:.4f}")
-        print(f"  -> Damping Factor: {damping_factor:.4f}")
+        print(f"  -> Damping Factor: {damping_factor:.4f}, Mean Gamma: {np.mean(gamma_star_u):.4f}")
         
-        # Apply the dynamically computed scaling factor
-        gamma_star_u = gamma_star_u * damping_factor
-        gamma_star_u = np.clip(gamma_star_u, 0.0, 1.0)
-
-        print(f"  Mean Adaptive Gamma: {np.mean(gamma_star_u):.4f}")
-        
-        # 4. Construct Adaptive Gram Matrix
+        # 5. Construct Adaptive Gram Matrix (CPU Sparse Multiplication)
         user_weights = np.power(d_u + self.eps, -gamma_star_u)
         D_U_adaptive = sp.diags(user_weights)
         item_weights = np.power(d_i + self.eps, -0.5)
         D_I_inv_half = sp.diags(item_weights)
 
+        # X.T @ D_U @ X is computed efficiently on CPU
         G_mid = X_sp.T @ D_U_adaptive @ X_sp
-        G_tilde = (D_I_inv_half @ G_mid @ D_I_inv_half).toarray()
+        G_tilde_cpu = (D_I_inv_half @ G_mid @ D_I_inv_half).toarray()
 
-        # 5. Solve EASE closed-form
-        G_tilde[np.diag_indices_from(G_tilde)] += self.reg_lambda
-        P_np = np.linalg.inv(G_tilde)
-        P_diag = np.diag(P_np)
-        W_np = -P_np / (P_diag[np.newaxis, :] + self.eps)
-        np.fill_diagonal(W_np, 0)
+        # 6. Solve Ridge on GPU (Fast Inversion)
+        print(f"  Solving Ridge Regression on {self.device}...")
+        G_torch = torch.from_numpy(G_tilde_cpu).to(torch.float32).to(self.device)
+        G_torch.diagonal().add_(self.reg_lambda)
+        
+        P = torch.linalg.inv(G_torch)
+        
+        # EASE-style weight derivation
+        P_diag = torch.diagonal(P)
+        W_gpu = -P / (P_diag.unsqueeze(0) + self.eps)
+        W_gpu.diagonal().zero_()
 
-        # 6. Store on device
-        self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)
-        self.train_matrix_gpu = self.get_train_matrix(data_loader)
+        # 7. Store weights on GPU
+        self.weight_matrix = W_gpu
         print("Adaptive ASPIRE fitting complete.")
 
     def forward(self, user_indices):
-        input_tensor = torch.index_select(self.train_matrix_gpu, 0, user_indices).to_dense()
-        return input_tensor @ self.weight_matrix
+        """
+        Memory Efficient Inference: Slice sparse on CPU, Multiply on GPU
+        """
+        user_ids_np = user_indices.cpu().numpy()
+        # 1. Slice on CPU (Fast)
+        batch_sp = self.train_matrix_cpu[user_ids_np]
+        # 2. Move to GPU as Sparse
+        batch_torch = self._to_torch_sparse(batch_sp).to(self.device)
+        # 3. Sparse-Dense Multiplication (Efficient)
+        return torch.sparse.mm(batch_torch, self.weight_matrix)

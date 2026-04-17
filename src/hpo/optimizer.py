@@ -100,7 +100,7 @@ class BayesianOptimizer:
                 elif p_type == 'int':
                     low, high = map(int, p_range.split()[:2])
                     val = trial.suggest_int(name, low, high, log=p_log)
-                elif p_type == 'int_for_k': val = trial.suggest_int(name, 1, self.get_max_k())
+                elif p_type == 'int_for_k': val = trial.suggest_int(name, 1, self.get_max_k(data_loader))
                 elif p_type == 'categorical':
                     choices = p_range
                     if isinstance(choices, str): choices = choices.split()
@@ -117,11 +117,14 @@ class BayesianOptimizer:
                 if self.metric in k: val = v; break
         return val if val is not None else 0.0
 
-    def get_max_k(self):
+    def get_max_k(self, data_loader=None):
         if self._max_k is None:
-            from src.data.loader import DataLoader
-            temp_dl = DataLoader({'dataset_name': self.dataset_name})
-            self._max_k = min(min(temp_dl.n_users, temp_dl.n_items) - 1, 2000)
+            if data_loader is not None:
+                self._max_k = min(min(data_loader.n_users, data_loader.n_items) - 1, 2000)
+            else:
+                from src.data.loader import DataLoader
+                temp_dl = DataLoader({'dataset_name': self.dataset_name})
+                self._max_k = min(min(temp_dl.n_users, temp_dl.n_items) - 1, 2000)
         return self._max_k
 
     def save_results(self, study, output_dir):

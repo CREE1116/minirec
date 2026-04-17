@@ -11,6 +11,7 @@ def clear_sparse_cache():
     global _GLOBAL_SPARSE_CACHE
     print("[SparseUtil] Clearing global sparse matrix cache...")
     _GLOBAL_SPARSE_CACHE.clear()
+    gc.collect()
 
 def get_train_matrix_scipy(data_loader):
     """Returns a Scipy CSR matrix for efficient operations, with caching support."""
@@ -22,18 +23,21 @@ def get_train_matrix_scipy(data_loader):
         return _GLOBAL_SPARSE_CACHE[cache_key]
     
     print(f"[SparseUtil] Creating Scipy CSR matrix for {dataset_name} {shape}...")
-    # DataLoader에서 데이터프레임 대신 numpy 배열을 사용하도록 변경됨
-    row = data_loader.train_users
-    col = data_loader.train_items
+    # row, col은 int32, data는 float32로 명시적 지정
+    row = data_loader.train_users.astype(np.int32)
+    col = data_loader.train_items.astype(np.int32)
     data = np.ones(len(row), dtype=np.float32)
     X = sparse.csr_matrix((data, (row, col)), shape=shape, dtype=np.float32)
     
     _GLOBAL_SPARSE_CACHE[cache_key] = X
     return X
 
-def compute_gram_matrix(X, data_loader=None):
+import gc
+
+def compute_gram_matrix(X, data_loader=None, device='cpu'):
     """Computes X.T @ X and caches it as a SPARSE matrix to save memory.
     Returns a DENSE copy (toarray) for calculation.
+    If device is 'cuda', tries to compute on GPU to save CPU memory peak.
     """
     dataset_name = getattr(data_loader, 'dataset_name', 'default') if data_loader else 'unknown'
     shape = X.shape # (Users, Items)
@@ -44,11 +48,39 @@ def compute_gram_matrix(X, data_loader=None):
         return _GLOBAL_SPARSE_CACHE[cache_key].toarray().astype(np.float32)
     
     print(f"[SparseUtil] Computing Gram matrix (X.T @ X) for {dataset_name} {shape}...")
-    # sparse dot product 수행 (X.T @ X)
-    G_sparse = X.T.dot(X)
     
+    # Force float32
+    if X.dtype != np.float32:
+        X = X.astype(np.float32)
+    
+    if 'cuda' in str(device) and X.shape[1] < 30000:
+        try:
+            print(f"  [SparseUtil] Attempting GPU Gram matrix computation...")
+            # scipy to torch sparse
+            X_coo = X.tocoo()
+            indices = torch.from_numpy(np.vstack((X_coo.row, X_coo.col)).astype(np.int64))
+            values = torch.from_numpy(X_coo.data.astype(np.float32))
+            X_torch = torch.sparse_coo_tensor(indices, values, torch.Size(X.shape), device=device).coalesce()
+            
+            # X.T @ X on GPU
+            G_torch = torch.sparse.mm(X_torch.t(), X_torch.to_dense()) 
+            G_sparse = sparse.csr_matrix(G_torch.cpu().numpy())
+            
+            del X_torch, G_torch
+            torch.cuda.empty_cache()
+        except Exception as e:
+            print(f"  [SparseUtil] GPU computation failed ({e}), falling back to CPU...")
+            G_sparse = X.T.dot(X)
+    else:
+        # sparse dot product 수행 (X.T @ X)
+        G_sparse = X.T.dot(X)
+    
+    if G_sparse.dtype != np.float32:
+        G_sparse = G_sparse.astype(np.float32)
+
     # Sparse 형태로 캐싱
     _GLOBAL_SPARSE_CACHE[cache_key] = G_sparse
     
-    # Dense 형태로 반환하여 즉시 사용 가능하게 함
+    gc.collect() # CPU 메모리 정리
+    
     return G_sparse.toarray().astype(np.float32)

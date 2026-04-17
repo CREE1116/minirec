@@ -4,6 +4,7 @@ import os
 import json
 import copy
 import yaml
+import gc
 from tqdm import tqdm
 from .eval.metrics import evaluate_metrics
 
@@ -43,17 +44,33 @@ class Trainer:
             self._train_loop()
 
         # HPO 모드: validation 결과 반환 (또는 설정에 따라 test 결과 반환)
+        res = None
         if self.hpo_mode:
             if self._best_val_metrics is not None:
-                return self._best_val_metrics
+                res = self._best_val_metrics
+            else:
+                # use_test_for_hpo가 True이면 test set 결과를 반환
+                if self.config.get('use_test_for_hpo', False):
+                    res = self.evaluate(is_final=True)
+                else:
+                    res = self.evaluate(is_final=False, all_metrics=True)
+        else:
+            # 일반 모드: test set 최종 평가
+            res = self.evaluate(is_final=True)
             
-            # use_test_for_hpo가 True이면 test set 결과를 반환
-            if self.config.get('use_test_for_hpo', False):
-                return self.evaluate(is_final=True)
-            return self.evaluate(is_final=False, all_metrics=True)
-
-        # 일반 모드: test set 최종 평가
-        return self.evaluate(is_final=True)
+        # [Cleanup] HPO 모드에서는 다음 trial을 위해 메모리 강제 해제
+        if self.hpo_mode:
+            # Weight matrix 등 대형 텐서 참조 해제
+            if hasattr(self.model, 'weight_matrix'):
+                self.model.weight_matrix = None
+            if hasattr(self.model, 'train_matrix_cpu'):
+                self.model.train_matrix_cpu = None
+            
+            gc.collect()
+            if 'cuda' in str(self.device):
+                torch.cuda.empty_cache()
+                
+        return res
 
     def _train_loop(self):
         train_cfg = self.train_cfg

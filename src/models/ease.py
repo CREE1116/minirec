@@ -1,5 +1,7 @@
 import torch
 import numpy as np
+import scipy.sparse as sp
+import gc
 from .base import BaseModel
 from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
 
@@ -10,26 +12,46 @@ class EASE(BaseModel):
         self.weight_matrix = None
 
     def fit(self, data_loader):
-        print(f"Fitting EASE (lambda={self.reg_lambda}) on CPU...")
+        print(f"Fitting EASE (lambda={self.reg_lambda}) on {self.device}...")
         
         # Use shared utility for efficient sparse matrix loading
         X_sp = get_train_matrix_scipy(data_loader)
         self.train_matrix_cpu = X_sp.tocsr() # Store on CPU for hybrid inference
 
-        print("  computing gram matrix (CPU)...")
-        G_np = compute_gram_matrix(X_sp, data_loader)
+        print(f"  computing gram matrix (on {self.device})...")
+        G_np = compute_gram_matrix(X_sp, data_loader, device=self.device)
         
-        print("  inverting matrix (CPU)...")
-        G_np[np.diag_indices_from(G_np)] += self.reg_lambda
+        if 'cuda' in str(self.device) and G_np.shape[0] < 20000:
+            print("  inverting matrix (GPU)...")
+            G_torch = torch.from_numpy(G_np).to(self.device)
+            del G_np
+            gc.collect()
+            
+            G_torch.diagonal().add_(self.reg_lambda)
+            P_torch = torch.linalg.inv(G_torch)
+            del G_torch
+            
+            diag_P = torch.diagonal(P_torch)
+            self.weight_matrix = -P_torch / (diag_P + 1e-12)
+            self.weight_matrix.diagonal().zero_()
+            del P_torch
+        else:
+            print("  inverting matrix (CPU)...")
+            G_np[np.diag_indices_from(G_np)] += self.reg_lambda
+            P_np = np.linalg.inv(G_np)
+            del G_np
+            gc.collect()
+            
+            diag_P = np.diag(P_np)
+            B_np = -P_np / (diag_P + 1e-12)
+            np.fill_diagonal(B_np, 0)
+            
+            self.weight_matrix = torch.tensor(B_np, dtype=torch.float32, device=self.device)
+            del P_np
         
-        P_np = np.linalg.inv(G_np)
-        
-        # Final weights: B_{ij} = -P_{ij} / P_{jj} (i != j), B_{ii} = 0
-        diag_P = np.diag(P_np)
-        B_np = -P_np / (diag_P + 1e-12)
-        np.fill_diagonal(B_np, 0)
-        
-        self.weight_matrix = torch.tensor(B_np, dtype=torch.float32, device=self.device)
+        gc.collect()
+        if 'cuda' in str(self.device):
+            torch.cuda.empty_cache()
         print("EASE fitting complete.")
 
     def forward(self, user_indices):

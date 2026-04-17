@@ -56,6 +56,7 @@ def compute_gram_matrix(X, data_loader=None, device='cpu'):
     # sparse dot product 수행 (X.T @ X) - Always on CPU for standardization
     G_sparse = X.T.dot(X)
     
+    # [Critical] toarray() 호출 전에 float32로 변환하여 16.6GB(float64) 할당 원천 차단
     if G_sparse.dtype != np.float32:
         G_sparse = G_sparse.astype(np.float32)
 
@@ -64,4 +65,5 @@ def compute_gram_matrix(X, data_loader=None, device='cpu'):
     
     gc.collect() # CPU 메모리 정리
     
-    return G_sparse.toarray().astype(np.float32)
+    # 이제 float32 상태이므로 toarray()는 8.3GB만 사용함
+    return G_sparse.toarray()

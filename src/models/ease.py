@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import scipy.sparse as sp
+import scipy.linalg as la
 import gc
 from .base import BaseModel
 from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
@@ -8,33 +9,32 @@ from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
 class EASE(BaseModel):
     def __init__(self, config, data_loader):
         super().__init__(config, data_loader)
-        self.reg_lambda = config['model'].get('reg_lambda', 500.0)
+        self.reg_lambda = np.float32(config['model'].get('reg_lambda', 500.0))
         self.weight_matrix = None
 
     def fit(self, data_loader):
         print(f"Fitting EASE (lambda={self.reg_lambda}) on CPU...")
         
-        # Use shared utility for efficient sparse matrix loading
         X_sp = get_train_matrix_scipy(data_loader)
-        self.train_matrix_cpu = X_sp.tocsr() # Store on CPU for hybrid inference
+        self.train_matrix_cpu = X_sp.tocsr()
 
-        print("  computing gram matrix (CPU)...")
-        # Ensure result is float32
+        print("  computing gram matrix (CPU float32)...")
         G_np = compute_gram_matrix(X_sp, data_loader).astype(np.float32)
         
-        print("  inverting matrix (CPU NumPy float32)...")
+        print("  inverting matrix (CPU In-place NumPy float32)...")
         G_np[np.diag_indices_from(G_np)] += self.reg_lambda
-        P_np = np.linalg.inv(G_np).astype(np.float32)
+        
+        # scipy.linalg.inv with overwrite_a=True saves 1 full matrix copy (8.3GB)
+        P_np = la.inv(G_np, overwrite_a=True).astype(np.float32)
         del G_np
         gc.collect()
         
         diag_P = np.diag(P_np).astype(np.float32)
-        # Use float32 epsilon to prevent promotion to float64
         B_np = (-P_np / (diag_P + np.float32(1e-12))).astype(np.float32)
         np.fill_diagonal(B_np, 0)
         
         self.weight_matrix = torch.tensor(B_np, dtype=torch.float32, device=self.device)
-        del P_np
+        del P_np, B_np
         
         gc.collect()
         if 'cuda' in str(self.device):

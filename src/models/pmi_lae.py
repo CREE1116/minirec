@@ -19,7 +19,7 @@ class PMILAE(BaseModel):
         self.weight_matrix = None
 
     def fit(self, data_loader):
-        print(f"Fitting PMI-LAE (alpha={self.alpha}, lambda={self.reg_lambda}) on {self.device}...")
+        print(f"Fitting PMI-LAE (alpha={self.alpha}, lambda={self.reg_lambda}) on CPU...")
 
         # 1. Load sparse matrix
         X_sp = get_train_matrix_scipy(data_loader)
@@ -43,15 +43,10 @@ class PMILAE(BaseModel):
         denom = (P_i[i] * np.power(P_i[j], self.alpha)) + self.eps
         
         pmi_values = np.log(P_ij + self.eps) - np.log(denom)
-        
-        # Clip negative to 0 (PPMI)
         pmi_values = np.maximum(pmi_values, 0)
         
-        # Build sparse PMI matrix and symmetrize
         K_sp = sp.coo_matrix((pmi_values, (i, j)), shape=(n_items, n_items))
         K_sp = (K_sp + K_sp.T) * 0.5
-        
-        # Pre-solver diagonal removal
         K_sp.setdiag(0)
         K_sp.eliminate_zeros()
         
@@ -59,44 +54,25 @@ class PMILAE(BaseModel):
         del G, item_deg, P_i, i, j, v, P_ij, denom, pmi_values, K_sp
         gc.collect()
         
-        # 5. Solve Strict EASE on top of PPMI Kernel:
-        if 'cuda' in str(self.device) and K_np.shape[0] < 20000:
-            print("  Solving Strict EASE closed-form (GPU)...")
-            K_torch = torch.from_numpy(K_np).to(self.device)
-            del K_np
-            gc.collect()
+        # 5. Solve Strict EASE on top of PPMI Kernel (CPU NumPy)
+        print("  Solving Strict EASE closed-form (CPU NumPy)...")
+        P = K_np 
+        P[np.diag_indices_from(P)] += self.reg_lambda
+        
+        try:
+            P_inv = np.linalg.inv(P)
+        except np.linalg.LinAlgError:
+            P[np.diag_indices_from(P)] += 1e-4
+            P_inv = np.linalg.inv(P)
+        del P, K_np
+        gc.collect()
 
-            K_torch.diagonal().add_(self.reg_lambda)
-            try:
-                P_inv = torch.linalg.inv(K_torch)
-            except RuntimeError:
-                K_torch.diagonal().add_(1e-4)
-                P_inv = torch.linalg.inv(K_torch)
-            del K_torch
-            
-            P_diag = torch.diagonal(P_inv)
-            self.weight_matrix = -P_inv / (P_diag.unsqueeze(0) + self.eps)
-            self.weight_matrix.diagonal().zero_()
-            del P_inv
-        else:
-            print("  Solving Strict EASE closed-form (CPU)...")
-            P = K_np # G_np is already a fresh copy
-            P[np.diag_indices_from(P)] += self.reg_lambda
-            
-            try:
-                P_inv = np.linalg.inv(P)
-            except np.linalg.LinAlgError:
-                P[np.diag_indices_from(P)] += 1e-4
-                P_inv = np.linalg.inv(P)
-            del P, K_np
-            gc.collect()
-
-            P_diag = np.diag(P_inv)
-            W_np = -P_inv / (P_diag[np.newaxis, :] + self.eps)
-            np.fill_diagonal(W_np, 0)
-            
-            self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)
-            del P_inv, W_np
+        P_diag = np.diag(P_inv)
+        W_np = -P_inv / (P_diag[np.newaxis, :] + self.eps)
+        np.fill_diagonal(W_np, 0)
+        
+        self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)
+        del P_inv, W_np
         
         gc.collect()
         if 'cuda' in str(self.device):

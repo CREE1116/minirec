@@ -146,7 +146,7 @@ class Trainer:
         if best_state:
             self.model.load_state_dict(best_state)
 
-    def evaluate(self, loader=None, is_final=False, all_metrics=False):
+    def evaluate(self, loader=None, is_final=False, all_metrics=True):
         self.model.eval()
         eval_cfg = self.config.get('evaluation', {}).copy()
         
@@ -154,10 +154,10 @@ class Trainer:
             batch_size = eval_cfg.get('batch_size', 4096)
             loader = self.data_loader.get_final_loader(batch_size) if is_final else self.data_loader.get_validation_loader(batch_size)
         
-        # [효율화] is_final도 아니고 all_metrics도 아니면 메인 메트릭 하나만 계산
+        # 훈련 도중 성능 모니터링 시에만 메인 메트릭 하나로 제한 (속도 최적화)
         if not is_final and not all_metrics:
             m_name = eval_cfg.get('main_metric', 'NDCG')
-            m_k = eval_cfg.get('main_metric_k', 20)
+            m_k = eval_cfg.get('main_metric_k', 100) # evaluation.yaml의 NDCG@100에 맞춤
             eval_cfg['metrics'] = [m_name]
             eval_cfg['top_k'] = [m_k]
             

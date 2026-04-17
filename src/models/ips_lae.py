@@ -30,43 +30,28 @@ class IPS_LAE(BaseModel):
         return torch.tensor(1 / (p + 1e-12), dtype=torch.float32, device=self.device)
 
     def fit(self, data_loader):
-        print(f"Fitting IPS_LAE (lambda={self.reg_lambda}) on {self.device}...")
+        print(f"Fitting IPS_LAE (lambda={self.reg_lambda}) on CPU...")
         
         # 1. Load data onto CPU
         X_sp = get_train_matrix_scipy(data_loader)
         self.train_matrix_cpu = X_sp.tocsr()
 
-        print(f"  computing gram matrix (on {self.device})...")
-        G_np = compute_gram_matrix(X_sp, data_loader, device=self.device)
+        print("  computing gram matrix (CPU)...")
+        G_np = compute_gram_matrix(X_sp, data_loader)
         
-        # 2. Ridge Inversion
-        if 'cuda' in str(self.device):
-            print("  inverting matrix (GPU)...")
-            G_torch = torch.from_numpy(G_np).to(self.device)
-            del G_np
-            gc.collect()
-            
-            G_torch.diagonal().add_(self.reg_lambda)
-            P_torch = torch.linalg.inv(G_torch)
-            del G_torch
-            
-            diag_P = torch.diagonal(P_torch)
-            B_gpu = -P_torch / (diag_P + 1e-12)
-            B_gpu.diagonal().zero_()
-            del P_torch
-        else:
-            print("  [Warning] CUDA not available, falling back to CPU...")
-            G_np[np.diag_indices_from(G_np)] += self.reg_lambda
-            P_np = np.linalg.inv(G_np)
-            del G_np
-            gc.collect()
-            
-            diag_P = np.diag(P_np)
-            B_np = -P_np / (diag_P + 1e-12)
-            np.fill_diagonal(B_np, 0)
-            
-            B_gpu = torch.tensor(B_np, dtype=torch.float32, device=self.device)
-            del P_np, B_np
+        # 2. Ridge Inversion (CPU NumPy)
+        print("  inverting matrix (CPU NumPy)...")
+        G_np[np.diag_indices_from(G_np)] += self.reg_lambda
+        P_np = np.linalg.inv(G_np)
+        del G_np
+        gc.collect()
+        
+        diag_P = np.diag(P_np)
+        B_np = -P_np / (diag_P + 1e-12)
+        np.fill_diagonal(B_np, 0)
+        
+        B_gpu = torch.tensor(B_np, dtype=torch.float32, device=self.device)
+        del P_np, B_np
         
         # 3. Apply IPS weighting on GPU
         inv_p = self._compute_inv_propensity(X_sp)

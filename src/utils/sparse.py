@@ -37,7 +37,7 @@ import gc
 def compute_gram_matrix(X, data_loader=None, device='cpu'):
     """Computes X.T @ X and caches it as a SPARSE matrix to save memory.
     Returns a DENSE copy (toarray) for calculation.
-    If device is 'cuda', tries to compute on GPU to save CPU memory peak.
+    All computations are unified to CPU (NumPy) for stability.
     """
     dataset_name = getattr(data_loader, 'dataset_name', 'default') if data_loader else 'unknown'
     shape = X.shape # (Users, Items)
@@ -47,33 +47,14 @@ def compute_gram_matrix(X, data_loader=None, device='cpu'):
         # Sparse 형태로 저장된 것을 가져와서 dense로 변환하여 반환
         return _GLOBAL_SPARSE_CACHE[cache_key].toarray().astype(np.float32)
     
-    print(f"[SparseUtil] Computing Gram matrix (X.T @ X) for {dataset_name} {shape}...")
+    print(f"[SparseUtil] Computing Gram matrix (X.T @ X) for {dataset_name} {shape} on CPU...")
     
     # Force float32
     if X.dtype != np.float32:
         X = X.astype(np.float32)
     
-    if 'cuda' in str(device) and X.shape[1] < 30000:
-        try:
-            print(f"  [SparseUtil] Attempting GPU Gram matrix computation...")
-            # scipy to torch sparse
-            X_coo = X.tocoo()
-            indices = torch.from_numpy(np.vstack((X_coo.row, X_coo.col)).astype(np.int64))
-            values = torch.from_numpy(X_coo.data.astype(np.float32))
-            X_torch = torch.sparse_coo_tensor(indices, values, torch.Size(X.shape), device=device).coalesce()
-            
-            # X.T @ X on GPU
-            G_torch = torch.sparse.mm(X_torch.t(), X_torch.to_dense()) 
-            G_sparse = sparse.csr_matrix(G_torch.cpu().numpy())
-            
-            del X_torch, G_torch
-            torch.cuda.empty_cache()
-        except Exception as e:
-            print(f"  [SparseUtil] GPU computation failed ({e}), falling back to CPU...")
-            G_sparse = X.T.dot(X)
-    else:
-        # sparse dot product 수행 (X.T @ X)
-        G_sparse = X.T.dot(X)
+    # sparse dot product 수행 (X.T @ X) - Always on CPU for standardization
+    G_sparse = X.T.dot(X)
     
     if G_sparse.dtype != np.float32:
         G_sparse = G_sparse.astype(np.float32)

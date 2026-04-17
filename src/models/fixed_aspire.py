@@ -9,12 +9,12 @@ class FixedAspire(BaseModel):
     def __init__(self, config, data_loader):
         super().__init__(config, data_loader)
         self.reg_lambda = config['model'].get('reg_lambda', 10.0)
-        self.alpha      = config['model'].get('alpha', 1.0) # User-side scaling exponent
+        self.alpha      = config['model'].get('alpha', 1.0)
         self.eps = 1e-12
         self.weight_matrix = None
 
     def fit(self, data_loader):
-        print(f"Fitting ASPIRE (reg_lambda={self.reg_lambda}, alpha={self.alpha}) on {self.device}...")
+        print(f"Fitting ASPIRE (reg_lambda={self.reg_lambda}, alpha={self.alpha}) on CPU...")
 
         X_sp = get_train_matrix_scipy(data_loader) # (U, I) sparse
         self.train_matrix_cpu = X_sp.tocsr() # Store for hybrid inference
@@ -39,34 +39,19 @@ class FixedAspire(BaseModel):
         del D_U_inv, X_scaled, G_raw_sp, G_tilde_sp
         gc.collect()
 
-        # ── Step 4: EASE solver ────────────────────────────────────────
-        if 'cuda' in str(self.device):
-            print("  Solving EASE closed-form (GPU)...")
-            G_torch = torch.from_numpy(G_tilde_np).to(self.device)
-            del G_tilde_np
-            gc.collect()
+        # ── Step 4: EASE solver (CPU NumPy) ────────────────────────────
+        print("  Solving EASE closed-form (CPU NumPy)...")
+        G_tilde_np[np.diag_indices_from(G_tilde_np)] += self.reg_lambda
+        P_np = np.linalg.inv(G_tilde_np)
+        del G_tilde_np
+        gc.collect()
 
-            G_torch.diagonal().add_(self.reg_lambda)
-            P_torch = torch.linalg.inv(G_torch)
-            del G_torch
-            
-            P_diag = torch.diagonal(P_torch)
-            self.weight_matrix = -P_torch / (P_diag.unsqueeze(0) + self.eps)
-            self.weight_matrix.diagonal().zero_()
-            del P_torch
-        else:
-            print("  [Warning] CUDA not available, falling back to CPU...")
-            G_tilde_np[np.diag_indices_from(G_tilde_np)] += self.reg_lambda
-            P_np = np.linalg.inv(G_tilde_np)
-            del G_tilde_np
-            gc.collect()
+        P_diag = np.diag(P_np)
+        W_np = -P_np / (P_diag[np.newaxis, :] + self.eps)
+        np.fill_diagonal(W_np, 0)
 
-            P_diag = np.diag(P_np)
-            W_np = -P_np / (P_diag[np.newaxis, :] + self.eps)
-            np.fill_diagonal(W_np, 0)
-
-            self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)
-            del P_np, W_np
+        self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)
+        del P_np, W_np
 
         gc.collect()
         if 'cuda' in str(self.device):

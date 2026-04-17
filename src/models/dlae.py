@@ -16,41 +16,32 @@ class DLAE(BaseModel):
         self.weight_matrix = None
 
     def fit(self, data_loader):
-        print(f"Fitting DLAE (p={self.dropout_p}, lambda={self.reg_lambda}) on {self.device}...")
+        print(f"Fitting DLAE (p={self.dropout_p}, lambda={self.reg_lambda}) on CPU...")
         
         # 1. Load data onto CPU
         X_sp = get_train_matrix_scipy(data_loader)
         self.train_matrix_cpu = X_sp.tocsr()
 
-        print(f"  computing gram matrix (on {self.device})...")
-        G_np = compute_gram_matrix(X_sp, data_loader, device=self.device)
+        print("  computing gram matrix (CPU)...")
+        G_np = compute_gram_matrix(X_sp, data_loader)
         
         # 2. Add Dropout Penalty: diag += (p/(1-p)) * G_jj
         p = min(self.dropout_p, 0.99)
         dropout_penalty = (p / (1.0 - p)) * np.diag(G_np)
         
-        if 'cuda' in str(self.device):
-            print("  solving linear system (GPU)...")
-            G_rhs = torch.from_numpy(G_np).to(self.device)
-            G_lhs = G_rhs.clone()
-            G_lhs.diagonal().add_(torch.from_numpy(dropout_penalty).to(self.device).float() + self.reg_lambda)
-            
-            self.weight_matrix = torch.linalg.solve(G_lhs, G_rhs)
-            
-            del G_lhs, G_rhs, G_np, dropout_penalty
-        else:
-            print("  [Warning] CUDA not available, falling back to CPU...")
-            # G_np is already a fresh copy
-            G_lhs = G_np
-            G_lhs[np.diag_indices_from(G_lhs)] += (dropout_penalty + self.reg_lambda)
-            
-            # G_orig 확보 (RHS 용)
-            G_orig = compute_gram_matrix(X_sp, data_loader)
-            
-            W_np = np.linalg.solve(G_lhs, G_orig)
-            
-            self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)
-            del G_lhs, G_orig, W_np, dropout_penalty
+        # 3. Solve linear system on CPU (NumPy)
+        print("  solving linear system (CPU NumPy)...")
+        # G_np is already a fresh copy
+        G_lhs = G_np
+        G_lhs[np.diag_indices_from(G_lhs)] += (dropout_penalty + self.reg_lambda)
+        
+        # G_orig 확보 (RHS 용)
+        G_orig = compute_gram_matrix(X_sp, data_loader)
+        
+        W_np = np.linalg.solve(G_lhs, G_orig)
+        
+        self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)
+        del G_lhs, G_orig, W_np, dropout_penalty
 
         gc.collect()
         if 'cuda' in str(self.device):

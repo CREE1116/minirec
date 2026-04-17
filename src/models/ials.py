@@ -2,8 +2,10 @@ import torch
 import torch.nn as nn
 import numpy as np
 import scipy.sparse as sp
+import gc
 from implicit.als import AlternatingLeastSquares
 from .base import BaseModel
+from src.utils.sparse import get_train_matrix_scipy
 
 class iALS(BaseModel):
     def __init__(self, config, data_loader):
@@ -17,16 +19,12 @@ class iALS(BaseModel):
         self.item_embedding = nn.Embedding(self.n_items, self.embedding_dim)
 
     def fit(self, data_loader):
-        print(f"Fitting iALS (dim={self.embedding_dim}, alpha={self.alpha}) via implicit (cpu)...")
+        print(f"Fitting iALS (dim={self.embedding_dim}, alpha={self.alpha}) via implicit library...")
 
-        train_df = data_loader.train_df
-        rows = train_df['user_id'].values
-        cols = train_df['item_id'].values
-        vals = np.ones(len(rows), dtype=np.float32)
+        # 1. Use memory-efficient loader
+        user_items = get_train_matrix_scipy(data_loader)
 
-        # implicit 0.7+: fit()은 user×item CSR 행렬을 받음
-        user_items = sp.csr_matrix((vals, (rows, cols)), shape=(self.n_users, self.n_items))
-
+        # 2. iALS calculation
         model = AlternatingLeastSquares(
             factors=self.embedding_dim,
             regularization=self.reg_lambda,
@@ -36,10 +34,15 @@ class iALS(BaseModel):
         )
         model.fit(user_items)
 
+        # 3. Load embeddings to GPU
         self.user_embedding.weight.data.copy_(
             torch.from_numpy(model.user_factors).to(self.device))
         self.item_embedding.weight.data.copy_(
             torch.from_numpy(model.item_factors).to(self.device))
+        
+        del model
+        gc.collect()
+        
         print("iALS fitting complete.")
 
     def forward(self, user_indices):

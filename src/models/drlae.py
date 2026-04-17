@@ -1,78 +1,78 @@
 import torch
-import torch.nn as nn
+import numpy as np
+import scipy.linalg as la
+import gc
 from .base import BaseModel
-
+from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
 
 class DRLAE(BaseModel):
     def __init__(self, config, data_loader):
         super().__init__(config, data_loader)
         
-        # 모델 파라미터 로드 (config['model'] 에서 가져옴)
         model_cfg = config.get('model', {})
-        self.lambda_base = float(model_cfg.get('reg_lambda', 500.0))
-        self.lambda_var = float(model_cfg.get('lambda_var', 1.0))
-        self.min_prop = float(model_cfg.get('min_prop', 1e-4))
+        self.lambda_base = np.float32(model_cfg.get('reg_lambda', 500.0))
+        self.lambda_var = np.float32(model_cfg.get('lambda_var', 1.0))
+        self.min_prop = np.float32(model_cfg.get('min_prop', 1e-4))
+        self.gamma_val = np.float32(model_cfg.get('gamma', 0.5)) # renamed to avoid conflict
+        self.eps = np.float32(1e-12)
         
-        self.W = None
-        self.train_matrix = None
+        self.weight_matrix = None
 
     def fit(self, data_loader):
-        print(f"Fitting DRLAE (lambda={self.lambda_base}, var={self.lambda_var} on {self.device}...")
-        X_sparse = self.get_train_matrix(data_loader)
-        self.train_matrix = X_sparse
+        print(f"Fitting DRLAE on CPU float32...")
+        X_sp = get_train_matrix_scipy(data_loader)
+        self.train_matrix_cpu = X_sp.tocsr() # Hybrid inference
         
         # 1. Propensity Score (p_i)
-        # torch.sparse.sum can be tricky on MPS, to_dense first if needed or use CPU
-        item_counts = torch.sparse.sum(X_sparse, dim=0).to_dense().to(self.device)
-        p_vec = (item_counts / (item_counts.max() + 1e-12)) ** self.gamma
-        p_vec = torch.clamp(p_vec, min=self.min_prop)
+        item_counts = np.array(X_sp.sum(axis=0)).flatten().astype(np.float32)
+        p_vec = (item_counts / (item_counts.max() + self.eps)) ** self.gamma_val
+        p_vec = np.clip(p_vec, a_min=self.min_prop, a_max=None).astype(np.float32)
         
-        # 2. 공분산 S = X^T X
-        X_dense = X_sparse.to_dense().to(self.device)
-        S = torch.mm(X_dense.t(), X_dense)
+        # 2. Optimized Gram matrix calculation (Block-wise)
+        print("  Computing Gram matrix (Block-wise CPU)...")
+        G_np = compute_gram_matrix(X_sp, data_loader)
         
-        # 3. 편향 제거 (IPS 방식): S_star = S / (p_i * p_j)
-        # Memory efficient way to compute S / outer(p, p)
-        S_star = S / p_vec.unsqueeze(0)
-        S_star = S_star / p_vec.unsqueeze(1)
+        # 3. Bias removal (IPS style): S_star = S / (p_i * p_j)
+        print("  Applying propensity weighting...")
+        G_np /= p_vec.reshape(-1, 1)
+        G_np /= p_vec.reshape(1, -1)
         
-        # 4. Variance-Penalized 정규화 (Omega)
-        S_diag = torch.diag(S)
-        var_penalty = ((1.0 - p_vec**2) / (p_vec**4 + 1e-12)) * (S_diag**2)
+        # 4. Variance-Penalized Regularization
+        print("  Applying variance penalty...")
+        # S_diag is diag of original G
+        S_diag = item_counts.astype(np.float32) 
+        var_penalty = ((np.float32(1.0) - p_vec**2) / (p_vec**4 + self.eps)) * (S_diag**2)
         omega_diag = self.lambda_base + self.lambda_var * var_penalty
         
-        # 5. 역행렬 연산
-        A = S_star.clone()
-        A.diagonal().add_(omega_diag)
+        G_np[np.diag_indices_from(G_np)] += omega_diag
         
-        print("Solving linear system...")
+        # 5. In-place Inversion
+        print("  Solving linear system (CPU In-place float32)...")
         try:
-            A_inv = torch.linalg.inv(A)
-        except (torch._C._LinAlgError, RuntimeError):
-            print("[Warning] Singular matrix, adding extra regularization.")
-            A.diagonal().add_(self.lambda_base * 10)
-            A_inv = torch.linalg.inv(A)
+            P_inv = la.inv(G_np, overwrite_a=True).astype(np.float32)
+        except (np.linalg.LinAlgError, la.LinAlgError):
+            print("[Warning] Singular matrix, using stronger regularization.")
+            G_np[np.diag_indices_from(G_np)] += self.lambda_base * np.float32(10)
+            P_inv = la.inv(G_np, overwrite_a=True).astype(np.float32)
         
-        # 6. 최종 LAE 가중치 W 도출
-        P_inv_diag = torch.diag(A_inv)
-        self.W = - A_inv / (P_inv_diag.unsqueeze(0) + 1e-12)
-        self.W.fill_diagonal_(0.0)
+        del G_np, item_counts, p_vec, S_diag, var_penalty, omega_diag
+        gc.collect()
+
+        # 6. Final W 도출
+        P_diag = np.diag(P_inv).astype(np.float32)
+        W_np = (-P_inv / (P_diag[np.newaxis, :] + self.eps)).astype(np.float32)
+        np.fill_diagonal(W_np, 0)
         
+        self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)
+        del P_inv, W_np, P_diag
+        
+        gc.collect()
+        if 'cuda' in str(self.device):
+            torch.cuda.empty_cache()
         print("DRLAE fitting complete.")
 
     def forward(self, user_indices):
-        if self.W is None:
-            raise RuntimeError("Model must be fitted before prediction.")
-            
-        if not hasattr(self, 'train_matrix_dense'):
-            self.train_matrix_dense = self.train_matrix.to_dense().to(self.device)
-            
-        X_users = self.train_matrix_dense[user_indices]
-        
-        # 스코어 계산: X_u @ W
-        scores = torch.mm(X_users, self.W)
-        
-        return scores
+        return self._get_batch_ratings(user_indices, self.weight_matrix)
     
     def calc_loss(self, batch_data):
         return (torch.tensor(0.0, device=self.device),), None

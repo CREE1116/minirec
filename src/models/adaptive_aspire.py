@@ -32,30 +32,30 @@ class AdaptiveAspire(BaseModel):
         k = np.float32(5.0)
         d_bar_u = ((d_u * d_bar_u_raw + k * global_dbar) / (d_u + k + self.eps)).astype(np.float32)
         
-        # 4. Apply Adaptive Formula with Log-Smoothing (Force float32)
+        # 4. Apply Adaptive Formula with Log-Smoothing
         log_du = np.log(d_u + np.float32(1.0) + self.eps).astype(np.float32)
         log_dbar = np.log(d_bar_u + np.float32(1.0) + self.eps).astype(np.float32)
-        
         gamma_u_star = ((log_dbar - log_du) / (log_dbar + self.eps)).astype(np.float32)
         
         # 5. Apply Controlled Safe Shrinkage
         self.gamma_star_u = (np.float32(0.8) * np.sqrt(np.maximum(0, gamma_u_star))).astype(np.float32)
         self.gamma_star_u = np.clip(self.gamma_star_u, 0.0, 0.9).astype(np.float32)
         
-        print(f"  -> Global d_bar: {global_dbar:.2f}")
-        print(f"  -> Mean Adaptive Gamma (Safe & Smoothed): {np.mean(self.gamma_star_u[d_u > 0]):.4f}")
-        
-        # 6. Construct Adaptive Gram Matrix
-        print("  Constructing G_tilde (CPU Sparse)...")
+        # Pre-calculate User Weights for the solver
         user_weights = np.power(d_u + self.eps, -self.gamma_star_u).astype(np.float32)
-        D_U_adaptive = sp.diags(user_weights, dtype=np.float32)
+        # Pre-calculate Item Weights for the solver
         item_weights = np.power(d_i + self.eps, -0.5).astype(np.float32)
-        D_I_inv_half = sp.diags(item_weights, dtype=np.float32)
 
-        G_mid = X_sp.T @ D_U_adaptive @ X_sp
-        G_tilde_np = (D_I_inv_half @ G_mid @ D_I_inv_half).toarray().astype(np.float32)
+        print(f"  -> Global d_bar: {global_dbar:.2f}")
+        print(f"  -> Mean Adaptive Gamma: {np.mean(self.gamma_star_u[d_u > 0]):.4f}")
+        
+        # 6. Optimized Block-wise Gram Matrix Construction
+        # This replaces the manual (X.T @ D @ X) with the 10GB peak utility
+        G_tilde_np = compute_gram_matrix(X_sp, data_loader, 
+                                         weights=user_weights, 
+                                         item_weights=item_weights)
 
-        del d_u, d_i, log_du, log_dbar, gamma_u_star, user_weights, D_U_adaptive, item_weights, D_I_inv_half, G_mid
+        del d_u, d_i, log_du, log_dbar, gamma_u_star, user_weights, item_weights
         gc.collect()
 
         # 7. Solve Ridge on CPU (NumPy float32)

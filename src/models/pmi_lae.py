@@ -1,25 +1,26 @@
 import numpy as np
 import torch
 import scipy.sparse as sp
+import scipy.linalg as la
 import gc
 from .base import BaseModel
-from src.utils.sparse import get_train_matrix_scipy
+from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
 
 class PMILAE(BaseModel):
     """
     PMI-LAE: Linear AutoEncoder on top of a PPMI (Positive Pointwise Mutual Information) Kernel.
-    Uses strict EASE closed-form solution to enforce diag(W)=0.
+    Uses strict EASE closed-form solution with In-place float32 optimization.
     """
 
     def __init__(self, config, data_loader):
         super().__init__(config, data_loader)
-        self.alpha = config['model'].get('alpha', 1.0)
-        self.reg_lambda = config['model'].get('reg_lambda', 10.0)
-        self.eps = 1e-12
+        self.alpha = np.float32(config['model'].get('alpha', 1.0))
+        self.reg_lambda = np.float32(config['model'].get('reg_lambda', 10.0))
+        self.eps = np.float32(1e-12)
         self.weight_matrix = None
 
     def fit(self, data_loader):
-        print(f"Fitting PMI-LAE (alpha={self.alpha}, lambda={self.reg_lambda}) on CPU...")
+        print(f"Fitting PMI-LAE (alpha={self.alpha}, lambda={self.reg_lambda}) on CPU with Strict float32...")
 
         # 1. Load sparse matrix
         X_sp = get_train_matrix_scipy(data_loader)
@@ -35,18 +36,19 @@ class PMILAE(BaseModel):
         total = item_deg.sum().astype(np.float32)
         P_i = (item_deg / (total + self.eps)).astype(np.float32)
 
-        # 4. Vectorized PMI calculation
+        # 4. Vectorized PMI calculation (Strict float32)
         print("  Computing PPMI Kernel (float32)...")
         i, j, v = G.row, G.col, G.data.astype(np.float32)
         
         P_ij = (v / (total + self.eps)).astype(np.float32)
         denom = ((P_i[i] * np.power(P_i[j], self.alpha)) + self.eps).astype(np.float32)
         
+        # Prevent promotion during log
         pmi_values = (np.log(P_ij + self.eps) - np.log(denom)).astype(np.float32)
         pmi_values = np.maximum(pmi_values, 0).astype(np.float32)
         
         K_sp = sp.coo_matrix((pmi_values, (i, j)), shape=(n_items, n_items), dtype=np.float32)
-        K_sp = (K_sp + K_sp.T) * 0.5
+        K_sp = (K_sp + K_sp.T) * np.float32(0.5)
         K_sp.setdiag(0)
         K_sp.eliminate_zeros()
         
@@ -54,17 +56,13 @@ class PMILAE(BaseModel):
         del G, item_deg, P_i, i, j, v, P_ij, denom, pmi_values, K_sp
         gc.collect()
         
-        # 5. Solve Strict EASE on top of PPMI Kernel (CPU NumPy float32)
-        print("  Solving Strict EASE closed-form (CPU NumPy float32)...")
-        P = K_np 
-        P[np.diag_indices_from(P)] += self.reg_lambda
+        # 5. Solve Strict EASE on top of PPMI Kernel (CPU In-place float32)
+        print("  Solving Strict EASE closed-form (CPU In-place NumPy float32)...")
+        # G_np is already a fresh copy
+        K_np[np.diag_indices_from(K_np)] += self.reg_lambda
         
-        try:
-            P_inv = np.linalg.inv(P).astype(np.float32)
-        except np.linalg.LinAlgError:
-            P[np.diag_indices_from(P)] += 1e-4
-            P_inv = np.linalg.inv(P).astype(np.float32)
-        del P, K_np
+        P_inv = la.inv(K_np, overwrite_a=True).astype(np.float32)
+        del K_np
         gc.collect()
 
         P_diag = np.diag(P_inv).astype(np.float32)

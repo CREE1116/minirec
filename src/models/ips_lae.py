@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import scipy.linalg as la
 import gc
 from .base import BaseModel
 from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
@@ -7,47 +8,49 @@ from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
 class IPS_LAE(BaseModel):
     """
     IPS_LAE: Inverse Propensity Scored Linear AutoEncoder
-    Optimized with Hybrid CPU/GPU inference.
+    Optimized with Strict float32 and In-place CPU operations.
     """
     def __init__(self, config, data_loader):
         super().__init__(config, data_loader)
-        self.reg_lambda = config['model'].get('reg_lambda', 500.0)
-        self.wbeta = config['model'].get('wbeta', 0.4)
+        self.reg_lambda = np.float32(config['model'].get('reg_lambda', 500.0))
+        self.wbeta = np.float32(config['model'].get('wbeta', 0.4))
         self.wtype = config['model'].get('wtype', 'logsigmoid')
+        self.eps = np.float32(1e-12)
         self.weight_matrix = None
 
     def _compute_inv_propensity(self, X):
         pop = np.array(X.sum(axis=0)).flatten().astype(np.float32)
         if self.wtype == 'powerlaw':
-            norm_pop = (pop / (np.max(pop) + 1e-12)).astype(np.float32)
+            norm_pop = (pop / (np.max(pop) + self.eps)).astype(np.float32)
             p = np.power(norm_pop, self.wbeta).astype(np.float32)
         elif self.wtype == 'logsigmoid':
-            log_freqs = np.log(pop + 1).astype(np.float32)
-            alpha_logit = -self.wbeta * (np.min(log_freqs) + np.max(log_freqs)) / 2
-            p = (1 / (1 + np.exp(-(alpha_logit + self.wbeta * log_freqs)))).astype(np.float32)
+            log_freqs = np.log(pop + np.float32(1.0)).astype(np.float32)
+            alpha_logit = -self.wbeta * (np.min(log_freqs) + np.max(log_freqs)) / np.float32(2.0)
+            p = (1.0 / (1.0 + np.exp(-(alpha_logit + self.wbeta * log_freqs)))).astype(np.float32)
         else:
             p = np.ones_like(pop, dtype=np.float32)
-        return torch.tensor(1 / (p + 1e-12), dtype=torch.float32, device=self.device)
+        # Result to GPU directly
+        return torch.tensor(1.0 / (p + self.eps), dtype=torch.float32, device=self.device)
 
     def fit(self, data_loader):
-        print(f"Fitting IPS_LAE (lambda={self.reg_lambda}) on CPU...")
+        print(f"Fitting IPS_LAE (lambda={self.reg_lambda}) on CPU with Strict float32...")
         
-        # 1. Load data onto CPU
         X_sp = get_train_matrix_scipy(data_loader)
         self.train_matrix_cpu = X_sp.tocsr()
 
-        print("  computing gram matrix (CPU)...")
+        print("  computing gram matrix (CPU float32)...")
         G_np = compute_gram_matrix(X_sp, data_loader).astype(np.float32)
         
-        # 2. Ridge Inversion (CPU NumPy)
-        print("  inverting matrix (CPU NumPy float32)...")
+        print("  inverting matrix (CPU In-place NumPy float32)...")
         G_np[np.diag_indices_from(G_np)] += self.reg_lambda
-        P_np = np.linalg.inv(G_np).astype(np.float32)
+        
+        # In-place inversion using scipy.linalg
+        P_np = la.inv(G_np, overwrite_a=True).astype(np.float32)
         del G_np
         gc.collect()
         
         diag_P = np.diag(P_np).astype(np.float32)
-        B_np = (-P_np / (diag_P + 1e-12)).astype(np.float32)
+        B_np = (-P_np / (diag_P + self.eps)).astype(np.float32)
         np.fill_diagonal(B_np, 0)
         
         B_gpu = torch.tensor(B_np, dtype=torch.float32, device=self.device)
@@ -65,7 +68,6 @@ class IPS_LAE(BaseModel):
         print("IPS_LAE fitting complete.")
 
     def forward(self, user_indices):
-        """Memory-efficient hybrid inference"""
         return self._get_batch_ratings(user_indices, self.weight_matrix)
 
     def calc_loss(self, batch_data):

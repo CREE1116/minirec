@@ -20,20 +20,20 @@ class RLAE(BaseModel):
         print(f"Fitting RLAE (lambda={self.reg_lambda}, b={self.b}) on CPU...")
         X_sp = get_train_matrix_scipy(data_loader)
         self.train_matrix_cpu = X_sp.tocsr()
-        G_np = compute_gram_matrix(X_sp, data_loader)
+        G_np = compute_gram_matrix(X_sp, data_loader).astype(np.float32)
         
         # G_np is already a fresh copy
         A = G_np
         A[np.diag_indices_from(A)] += self.reg_lambda
         
-        print(f"  inverting matrix on CPU (NumPy)...")
-        P = np.linalg.inv(A)
+        print(f"  inverting matrix on CPU (NumPy float32)...")
+        P = np.linalg.inv(A).astype(np.float32)
         del A
         
-        diag_P = np.diag(P)
-        penalty = np.maximum(self.reg_lambda, (1.0 - self.b) / (diag_P + self.eps))
+        diag_P = np.diag(P).astype(np.float32)
+        penalty = np.maximum(self.reg_lambda, (1.0 - self.b) / (diag_P + self.eps)).astype(np.float32)
         
-        W = - (P * penalty[np.newaxis, :])
+        W = (-P * penalty[np.newaxis, :]).astype(np.float32)
         W[np.diag_indices_from(W)] += 1.0
         
         self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)
@@ -67,24 +67,24 @@ class RDLAE(BaseModel):
         print(f"Fitting RDLAE (lambda={self.reg_lambda}, p={self.dropout_p}, b={self.b}) on CPU...")
         X_sp = get_train_matrix_scipy(data_loader)
         self.train_matrix_cpu = X_sp.tocsr()
-        G_np = compute_gram_matrix(X_sp, data_loader)
+        G_np = compute_gram_matrix(X_sp, data_loader).astype(np.float32)
         
         p = min(self.dropout_p, 0.99)
-        dropout_penalty_np = (p / (1.0 - p)) * np.diag(G_np)
-        lambda_diag_np = dropout_penalty_np + self.reg_lambda
+        dropout_penalty_np = ((p / (1.0 - p)) * np.diag(G_np)).astype(np.float32)
+        lambda_diag_np = (dropout_penalty_np + self.reg_lambda).astype(np.float32)
         
         # G_np is already a fresh copy
         A = G_np
         A[np.diag_indices_from(A)] += lambda_diag_np
         
-        print(f"  inverting matrix on CPU (NumPy)...")
-        P = np.linalg.inv(A)
+        print(f"  inverting matrix on CPU (NumPy float32)...")
+        P = np.linalg.inv(A).astype(np.float32)
         del A
         
-        diag_P = np.diag(P)
-        total_penalty = np.maximum(lambda_diag_np, (1.0 - self.b) / (diag_P + self.eps))
+        diag_P = np.diag(P).astype(np.float32)
+        total_penalty = np.maximum(lambda_diag_np, (1.0 - self.b) / (diag_P + self.eps)).astype(np.float32)
         
-        W = - (P * total_penalty[np.newaxis, :])
+        W = (-P * total_penalty[np.newaxis, :]).astype(np.float32)
         W[np.diag_indices_from(W)] += 1.0
         
         self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)

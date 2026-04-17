@@ -20,13 +20,13 @@ class FixedAspire(BaseModel):
         self.train_matrix_cpu = X_sp.tocsr() # Store for hybrid inference
 
         # ── Step 1 & 2: Scaling vectors ─────
-        n_u = np.asarray(X_sp.sum(axis=1)).ravel()
-        user_weights = np.power(n_u + self.eps, -self.alpha)
-        D_U_inv = sp.diags(user_weights)
+        n_u = np.asarray(X_sp.sum(axis=1)).ravel().astype(np.float32)
+        user_weights = np.power(n_u + self.eps, -self.alpha).astype(np.float32)
+        D_U_inv = sp.diags(user_weights, dtype=np.float32)
 
-        n_i = np.asarray(X_sp.sum(axis=0)).ravel()
-        item_weights = np.power(n_i + self.eps, -self.alpha/2.0)
-        D_I_inv_half = sp.diags(item_weights)
+        n_i = np.asarray(X_sp.sum(axis=0)).ravel().astype(np.float32)
+        item_weights = np.power(n_i + self.eps, -self.alpha/2.0).astype(np.float32)
+        D_I_inv_half = sp.diags(item_weights, dtype=np.float32)
 
         # ── Step 3: Normalized Gram Matrix ─────────────────────────────
         print("  Constructing G_tilde (CPU Sparse)...")

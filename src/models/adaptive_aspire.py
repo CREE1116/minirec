@@ -25,32 +25,33 @@ class AdaptiveAspire(BaseModel):
         d_i = np.asarray(X_sp.sum(axis=0)).ravel()
         
         # 3. Compute Mean Item Popularity per User (d_bar_u) with Global Prior
-        global_dbar = np.mean(d_i)
-        d_bar_u_raw = np.asarray(X_sp.dot(d_i)).ravel() / (d_u + self.eps)
+        global_dbar = np.mean(d_i).astype(np.float32)
+        d_bar_u_raw = (np.asarray(X_sp.dot(d_i)).ravel() / (d_u + self.eps)).astype(np.float32)
         
         k = 5.0 
-        d_bar_u = (d_u * d_bar_u_raw + k * global_dbar) / (d_u + k + self.eps)
+        d_bar_u = ((d_u * d_bar_u_raw + k * global_dbar) / (d_u + k + self.eps)).astype(np.float32)
         
-        # 4. Apply Adaptive Formula with Log-Smoothing
-        log_du = np.log(d_u + 1.0 + self.eps)
-        log_dbar = np.log(d_bar_u + 1.0 + self.eps)
+        # 4. Apply Adaptive Formula with Log-Smoothing (Force float32)
+        log_du = np.log(d_u + 1.0 + self.eps).astype(np.float32)
+        log_dbar = np.log(d_bar_u + 1.0 + self.eps).astype(np.float32)
         
-        gamma_u_star = (log_dbar - log_du) / (log_dbar + self.eps)
+        gamma_u_star = ((log_dbar - log_du) / (log_dbar + self.eps)).astype(np.float32)
         
         # 5. Apply Controlled Safe Shrinkage
-        self.gamma_star_u = 0.8 * np.sqrt(np.maximum(0, gamma_u_star))
-        self.gamma_star_u = np.clip(self.gamma_star_u, 0.0, 0.9)
+        self.gamma_star_u = (0.8 * np.sqrt(np.maximum(0, gamma_u_star))).astype(np.float32)
+        self.gamma_star_u = np.clip(self.gamma_star_u, 0.0, 0.9).astype(np.float32)
         
         print(f"  -> Global d_bar: {global_dbar:.2f}")
         print(f"  -> Mean Adaptive Gamma (Safe & Smoothed): {np.mean(self.gamma_star_u[d_u > 0]):.4f}")
         
         # 6. Construct Adaptive Gram Matrix
         print("  Constructing G_tilde (CPU Sparse)...")
-        user_weights = np.power(d_u + self.eps, -self.gamma_star_u)
-        D_U_adaptive = sp.diags(user_weights)
-        item_weights = np.power(d_i + self.eps, -0.5) 
-        D_I_inv_half = sp.diags(item_weights)
+        user_weights = np.power(d_u + self.eps, -self.gamma_star_u).astype(np.float32)
+        D_U_adaptive = sp.diags(user_weights, dtype=np.float32)
+        item_weights = np.power(d_i + self.eps, -0.5).astype(np.float32)
+        D_I_inv_half = sp.diags(item_weights, dtype=np.float32)
 
+        # Sparse multiplication also should be float32
         G_mid = X_sp.T @ D_U_adaptive @ X_sp
         G_tilde_np = (D_I_inv_half @ G_mid @ D_I_inv_half).toarray().astype(np.float32)
 

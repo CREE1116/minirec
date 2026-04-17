@@ -31,21 +31,21 @@ class PMILAE(BaseModel):
         G = (X_sp.T @ X_sp).tocoo()
 
         # 3. Marginals
-        item_deg = np.asarray(X_sp.sum(axis=0)).ravel()
-        total = item_deg.sum()
-        P_i = item_deg / (total + self.eps)
+        item_deg = np.asarray(X_sp.sum(axis=0)).ravel().astype(np.float32)
+        total = item_deg.sum().astype(np.float32)
+        P_i = (item_deg / (total + self.eps)).astype(np.float32)
 
         # 4. Vectorized PMI calculation
-        print("  Computing PPMI Kernel...")
-        i, j, v = G.row, G.col, G.data
+        print("  Computing PPMI Kernel (float32)...")
+        i, j, v = G.row, G.col, G.data.astype(np.float32)
         
-        P_ij = v / (total + self.eps)
-        denom = (P_i[i] * np.power(P_i[j], self.alpha)) + self.eps
+        P_ij = (v / (total + self.eps)).astype(np.float32)
+        denom = ((P_i[i] * np.power(P_i[j], self.alpha)) + self.eps).astype(np.float32)
         
-        pmi_values = np.log(P_ij + self.eps) - np.log(denom)
-        pmi_values = np.maximum(pmi_values, 0)
+        pmi_values = (np.log(P_ij + self.eps) - np.log(denom)).astype(np.float32)
+        pmi_values = np.maximum(pmi_values, 0).astype(np.float32)
         
-        K_sp = sp.coo_matrix((pmi_values, (i, j)), shape=(n_items, n_items))
+        K_sp = sp.coo_matrix((pmi_values, (i, j)), shape=(n_items, n_items), dtype=np.float32)
         K_sp = (K_sp + K_sp.T) * 0.5
         K_sp.setdiag(0)
         K_sp.eliminate_zeros()
@@ -54,21 +54,21 @@ class PMILAE(BaseModel):
         del G, item_deg, P_i, i, j, v, P_ij, denom, pmi_values, K_sp
         gc.collect()
         
-        # 5. Solve Strict EASE on top of PPMI Kernel (CPU NumPy)
-        print("  Solving Strict EASE closed-form (CPU NumPy)...")
+        # 5. Solve Strict EASE on top of PPMI Kernel (CPU NumPy float32)
+        print("  Solving Strict EASE closed-form (CPU NumPy float32)...")
         P = K_np 
         P[np.diag_indices_from(P)] += self.reg_lambda
         
         try:
-            P_inv = np.linalg.inv(P)
+            P_inv = np.linalg.inv(P).astype(np.float32)
         except np.linalg.LinAlgError:
             P[np.diag_indices_from(P)] += 1e-4
-            P_inv = np.linalg.inv(P)
+            P_inv = np.linalg.inv(P).astype(np.float32)
         del P, K_np
         gc.collect()
 
-        P_diag = np.diag(P_inv)
-        W_np = -P_inv / (P_diag[np.newaxis, :] + self.eps)
+        P_diag = np.diag(P_inv).astype(np.float32)
+        W_np = (-P_inv / (P_diag[np.newaxis, :] + self.eps)).astype(np.float32)
         np.fill_diagonal(W_np, 0)
         
         self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)

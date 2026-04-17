@@ -9,13 +9,13 @@ from src.utils.sparse import get_train_matrix_scipy
 
 def gini_coefficient(values: np.ndarray) -> float:
     """Gini coefficient [0, 1]. 높을수록 인기도 불균등."""
-    values = np.asarray(values, dtype=float).flatten()
+    values = np.asarray(values, dtype=np.float32).flatten()
     if values.size == 0 or values.sum() == 0:
         return 0.0
     sorted_vals = np.sort(values)
     n = values.size
     cum = np.cumsum(sorted_vals)
-    return (n + 1 - 2 * (cum.sum() / cum[-1])) / n
+    return float((n + 1 - 2 * (cum.sum() / cum[-1])) / n)
 
 
 def edge_homophily(X: sparse.csr_matrix,
@@ -29,20 +29,20 @@ def edge_homophily(X: sparse.csr_matrix,
         idx = sorted(rng.choice(X.shape[1], size=max_items, replace=False))
         X = X[:, idx]
 
-    # Gram matrix calculation on CPU
+    # Gram matrix calculation on CPU (Force float32)
     G_np = X.T.dot(X).toarray().astype(np.float32)
-    degree = np.diag(G_np).copy()
-    degree_sum = degree[:, None] + degree[None, :]
+    degree = np.diag(G_np).copy().astype(np.float32)
+    degree_sum = (degree[:, None] + degree[None, :]).astype(np.float32)
 
-    denom = np.where(degree_sum - G_np == 0, 1e-12, degree_sum - G_np)
-    sim = G_np / denom
+    denom = np.where(degree_sum - G_np == 0, 1e-12, degree_sum - G_np).astype(np.float32)
+    sim = (G_np / denom).astype(np.float32)
 
     min_deg = np.where(
         np.minimum(degree[:, None], degree[None, :]) == 0,
         1e-12,
         np.minimum(degree[:, None], degree[None, :])
-    )
-    w = (G_np ** volume_weight_exp) * (G_np / min_deg)
+    ).astype(np.float32)
+    w = ((G_np ** volume_weight_exp) * (G_np / min_deg)).astype(np.float32)
 
     mask = np.triu(np.ones_like(G_np, dtype=bool), k=1) & (w > 0)
     num = (w * sim)[mask].sum()
@@ -94,10 +94,11 @@ class EASE_DAN(BaseModel):
 
         # 2. 유저 정규화 (X_tilde = D_U^{-β} X)
         print("  computing gram matrix with user normalization (CPU Sparse)...")
-        X_T_weighted = X_sp.multiply(np.power(user_counts + self.eps, -beta).reshape(-1, 1)).T
+        u_weights = np.power(user_counts + self.eps, -beta).reshape(-1, 1).astype(np.float32)
+        X_T_weighted = X_sp.multiply(u_weights).T
         G_np = X_T_weighted.dot(X_sp).toarray().astype(np.float32)
         
-        del X_T_weighted
+        del X_T_weighted, u_weights
         gc.collect()
 
         print("  inverting matrix (CPU NumPy)...")
@@ -106,14 +107,14 @@ class EASE_DAN(BaseModel):
         del G_np
         gc.collect()
         
-        diag_P = np.diag(P)
-        W = -P / (diag_P.reshape(1, -1) + self.eps)
+        diag_P = np.diag(P).astype(np.float32)
+        W = (-P / (diag_P.reshape(1, -1) + self.eps)).astype(np.float32)
         np.fill_diagonal(W, 0)
         del P
         
         # 5. 아이템 정규화 (CPU)
-        item_power = np.power(item_counts + self.eps, -alpha)
-        W = W * (1.0 / (item_power + self.eps)).reshape(-1, 1) * item_power.reshape(1, -1)
+        item_power = np.power(item_counts + self.eps, -alpha).astype(np.float32)
+        W = (W * (1.0 / (item_power + self.eps)).reshape(-1, 1) * item_power.reshape(1, -1)).astype(np.float32)
         np.fill_diagonal(W, 0)
 
         self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)
@@ -171,26 +172,27 @@ class DLAE_DAN(BaseModel):
 
         # 1. 유저 정규화
         print("  computing gram matrix with user normalization (CPU Sparse)...")
-        X_T_weighted = X_sp.multiply(np.power(user_counts + self.eps, -beta).reshape(-1, 1)).T
+        u_weights = np.power(user_counts + self.eps, -beta).reshape(-1, 1).astype(np.float32)
+        X_T_weighted = X_sp.multiply(u_weights).T
         G_dan_np = X_T_weighted.dot(X_sp).toarray().astype(np.float32)
         
-        del X_T_weighted
+        del X_T_weighted, u_weights
         gc.collect()
 
         # 2. DLAE Dropout 규제
         p_val = min(self.dropout_p, 0.99)
-        lmbda_eff_np = self.reg_p + (p_val / (1.0 - p_val + self.eps)) * item_counts
+        lmbda_eff_np = (self.reg_p + (p_val / (1.0 - p_val + self.eps)) * item_counts).astype(np.float32)
         
         print("  solving linear system (CPU NumPy)...")
-        G_lhs = G_dan_np.copy()
+        G_lhs = G_dan_np.copy().astype(np.float32)
         G_lhs[np.diag_indices(self.n_items)] += lmbda_eff_np
         
-        W = np.linalg.solve(G_lhs, G_dan_np)
+        W = np.linalg.solve(G_lhs, G_dan_np).astype(np.float32)
         del G_lhs, G_dan_np
         
         # 3. 아이템 정규화 후처리
-        item_power = np.power(item_counts + self.eps, -alpha)
-        W = W * (1.0 / (item_power + self.eps)).reshape(-1, 1) * item_power.reshape(1, -1)
+        item_power = np.power(item_counts + self.eps, -alpha).astype(np.float32)
+        W = (W * (1.0 / (item_power + self.eps)).reshape(-1, 1) * item_power.reshape(1, -1)).astype(np.float32)
         np.fill_diagonal(W, 0)
 
         self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)

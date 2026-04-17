@@ -28,18 +28,18 @@ class LAE(BaseModel):
         # 2. Solve linear system on CPU
         print("  solving linear system (CPU)...")
         # G_np is already a fresh copy from compute_gram_matrix
-        A_np = G_np
+        A_np = G_np.astype(np.float32)
         A_np[np.diag_indices_from(A_np)] += self.reg_lambda
         
         # G_np를 보존해야 하므로, compute_gram_matrix에서 하나 더 가져옴 (Sparse 캐시 활용)
-        G_orig = compute_gram_matrix(X_sp, data_loader) 
+        G_orig = compute_gram_matrix(X_sp, data_loader).astype(np.float32) 
 
         try:
-            W_np = np.linalg.solve(A_np, G_orig)
+            W_np = np.linalg.solve(A_np, G_orig).astype(np.float32)
         except np.linalg.LinAlgError:
             print("[Warning] Singular matrix, using stronger regularization.")
             A_np[np.diag_indices_from(A_np)] += 1e-4
-            W_np = np.linalg.solve(A_np, G_orig)
+            W_np = np.linalg.solve(A_np, G_orig).astype(np.float32)
         
         self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)
         del A_np, G_orig, W_np, G_np

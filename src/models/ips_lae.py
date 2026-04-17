@@ -8,7 +8,7 @@ from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
 class IPS_LAE(BaseModel):
     """
     IPS_LAE: Inverse Propensity Scored Linear AutoEncoder
-    Optimized with Strict float32 and In-place CPU operations.
+    Optimized with Hybrid CPU/GPU inference and Strict Minimal Memory.
     """
     def __init__(self, config, data_loader):
         super().__init__(config, data_loader)
@@ -26,48 +26,59 @@ class IPS_LAE(BaseModel):
         elif self.wtype == 'logsigmoid':
             log_freqs = np.log(pop + np.float32(1.0)).astype(np.float32)
             alpha_logit = -self.wbeta * (np.min(log_freqs) + np.max(log_freqs)) / np.float32(2.0)
-            p = (1.0 / (1.0 + np.exp(-(alpha_logit + self.wbeta * log_freqs)))).astype(np.float32)
+            p = (np.float32(1.0) / (np.float32(1.0) + np.exp(-(alpha_logit + self.wbeta * log_freqs)))).astype(np.float32)
         else:
             p = np.ones_like(pop, dtype=np.float32)
-        # Result to GPU directly
-        return torch.tensor(1.0 / (p + self.eps), dtype=torch.float32, device=self.device)
+        
+        inv_p = (np.float32(1.0) / (p + self.eps)).astype(np.float32)
+        del pop, p
+        return torch.tensor(inv_p, dtype=torch.float32, device=self.device)
 
     def fit(self, data_loader):
-        print(f"Fitting IPS_LAE (lambda={self.reg_lambda}) on CPU with Strict float32...")
+        print(f"Fitting IPS_LAE (lambda={self.reg_lambda}) on CPU with Strict minimal memory...")
         
         X_sp = get_train_matrix_scipy(data_loader)
         self.train_matrix_cpu = X_sp.tocsr()
 
         print("  computing gram matrix (CPU float32)...")
+        # G_np is our primary 8.3GB matrix
         G_np = compute_gram_matrix(X_sp, data_loader).astype(np.float32)
+        gc.collect()
         
-        print("  inverting matrix (CPU In-place NumPy float32)...")
+        print("  inverting matrix (CPU In-place float32)...")
         G_np[np.diag_indices_from(G_np)] += self.reg_lambda
         
-        # In-place inversion using scipy.linalg
+        # P_np will reuse G_np memory if possible, or we del G_np after
         P_np = la.inv(G_np, overwrite_a=True).astype(np.float32)
-        del G_np
+        del G_np 
         gc.collect()
         
         diag_P = np.diag(P_np).astype(np.float32)
+        # B_np is the final weight matrix in CPU
         B_np = (-P_np / (diag_P + self.eps)).astype(np.float32)
         np.fill_diagonal(B_np, 0)
+        del P_np, diag_P
+        gc.collect()
         
+        # Move to GPU
         B_gpu = torch.tensor(B_np, dtype=torch.float32, device=self.device)
-        del P_np, B_np
+        del B_np 
+        gc.collect()
         
         # 3. Apply IPS weighting on GPU
         inv_p = self._compute_inv_propensity(X_sp)
         self.weight_matrix = B_gpu * inv_p.view(1, -1)
         self.weight_matrix.diagonal().zero_()
-        del B_gpu, inv_p
         
+        del B_gpu, inv_p
         gc.collect()
+        
         if 'cuda' in str(self.device):
             torch.cuda.empty_cache()
         print("IPS_LAE fitting complete.")
 
     def forward(self, user_indices):
+        """Memory-efficient hybrid inference"""
         return self._get_batch_ratings(user_indices, self.weight_matrix)
 
     def calc_loss(self, batch_data):

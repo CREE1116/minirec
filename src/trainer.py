@@ -60,15 +60,23 @@ class Trainer:
             
         # [Cleanup] HPO 모드에서는 다음 trial을 위해 메모리 강제 해제
         if self.hpo_mode:
-            # Weight matrix 등 대형 텐서 참조 해제
+            # 1. Weight matrix 및 대형 텐서 참조 해제 (가장 중요)
             if hasattr(self.model, 'weight_matrix'):
+                del self.model.weight_matrix
                 self.model.weight_matrix = None
             if hasattr(self.model, 'train_matrix_cpu'):
+                del self.model.train_matrix_cpu
                 self.model.train_matrix_cpu = None
             
+            # 2. 모델 자체의 참조 제거 시도
+            # del self.model 
+            
+            # 3. 가비지 컬렉션 및 GPU 캐시 비우기
             gc.collect()
             if 'cuda' in str(self.device):
                 torch.cuda.empty_cache()
+            elif 'mps' in str(self.device):
+                torch.mps.empty_cache()
                 
         return res
 

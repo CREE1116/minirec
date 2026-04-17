@@ -6,38 +6,51 @@ from .base import BaseModel
 from src.utils.sparse import get_train_matrix_scipy, compute_gram_matrix
 
 class LAE(BaseModel):
+    """
+    LAE: Linear AutoEncoder (Wiener Filter form)
+    Formula: S = G @ (G + lambda * I)^-1
+    """
+
     def __init__(self, config, data_loader):
         super().__init__(config, data_loader)
         self.reg_lambda = np.float32(config['model'].get('reg_lambda', 500.0))
         self.weight_matrix = None
 
     def fit(self, data_loader):
-        print(f"Fitting LAE (lambda={self.reg_lambda}) on CPU...")
+        print(f"Fitting LAE (lambda={self.reg_lambda}) on CPU with Strict minimal memory...")
         
+        # 1. Load data onto CPU
         X_sp = get_train_matrix_scipy(data_loader)
         self.train_matrix_cpu = X_sp.tocsr()
 
         print("  computing gram matrix (CPU float32)...")
         G_np = compute_gram_matrix(X_sp, data_loader).astype(np.float32)
+        gc.collect()
         
+        # 2. Solve linear system on CPU
         print("  solving linear system (CPU In-place float32)...")
         A_np = G_np
         A_np[np.diag_indices_from(A_np)] += self.reg_lambda
         
+        # G_np를 보존해야 하므로, compute_gram_matrix에서 하나 더 가져옴 (RHS 용)
+        # 하지만 메모리 아끼기 위해 A_np 수정 전의 G를 다시 확보하는 대신...
+        # G_orig = A_np - lambda*I 임을 이용할 수도 있으나, 안전하게 다시 불러옴 (Sparse 캐시 활용)
         G_orig = compute_gram_matrix(X_sp, data_loader).astype(np.float32) 
+        gc.collect()
 
         try:
-            # la.solve with overwrite flags saves 2 full matrix copies
+            # overwrite_a/b=True saves 16.6GB RAM
             W_np = la.solve(A_np, G_orig, overwrite_a=True, overwrite_b=True).astype(np.float32)
         except (np.linalg.LinAlgError, la.LinAlgError):
             print("[Warning] Singular matrix, using stronger regularization.")
             A_np[np.diag_indices_from(A_np)] += np.float32(1e-4)
             W_np = la.solve(A_np, G_orig, overwrite_a=True, overwrite_b=True).astype(np.float32)
         
+        # 3. Transfer to GPU and clean up
         self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)
         del A_np, G_orig, W_np, G_np
-
         gc.collect()
+
         if 'cuda' in str(self.device):
             torch.cuda.empty_cache()
         print("LAE fitting complete.")

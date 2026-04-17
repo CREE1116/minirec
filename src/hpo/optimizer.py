@@ -151,6 +151,9 @@ class BayesianOptimizer:
         self._max_k = min(min(common_data_loader.n_users, common_data_loader.n_items) - 1, 2000)
 
         for seed in self.seeds:
+            # [CRITICAL] Clear any cached sparse/dense matrices before starting a new seed's trials
+            clear_sparse_cache()
+            
             print(f"\n>>> Starting HPO ({self.mode.upper()}) for Seed: {seed}")
             seed_dir = os.path.join(self.hpo_root, f"seed_{seed}")
             os.makedirs(seed_dir, exist_ok=True)

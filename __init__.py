@@ -11,8 +11,9 @@ from src.trainer import Trainer
 from src.hpo.optimizer import BayesianOptimizer
 
 from src.utils.seed import set_seed
+from src.utils.sparse import clear_sparse_cache
 
-def run(dataset_name, model_cfg, output_path=None, hpo_mode=False, use_test_for_hpo=False):
+def run(dataset_name, model_cfg, output_path=None, hpo_mode=False, use_test_for_hpo=False, data_loader=None):
     """
     단일 실험 실행 함수.
     dataset_name: 'ml-100k', 'steam' 등 (data/preprocessed/ 하위 폴더명)
@@ -20,6 +21,10 @@ def run(dataset_name, model_cfg, output_path=None, hpo_mode=False, use_test_for_
     # 1. Load Configs
     if isinstance(model_cfg, str): model_cfg = load_yaml(model_cfg)
     eval_cfg = load_yaml('configs/evaluation.yaml')
+    
+    # HPO가 아닌 경우(또는 명시적으로 data_loader가 없는 경우) 캐시 정리
+    if data_loader is None:
+        clear_sparse_cache()
     
     # 시드는 평가 설정에서 가져옴 (없으면 None)
     config_seed = eval_cfg.get('seed')
@@ -39,7 +44,8 @@ def run(dataset_name, model_cfg, output_path=None, hpo_mode=False, use_test_for_
     if use_test_for_hpo: config['use_test_for_hpo'] = True
     
     # 3. Load Data & Model
-    data_loader = DataLoader(config)
+    if data_loader is None:
+        data_loader = DataLoader(config)
     
     # 4. Get Model & Device
     model_name = config.get('model_name')

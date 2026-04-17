@@ -26,7 +26,7 @@ class LAE(BaseModel):
         G_np = compute_gram_matrix(X_sp, data_loader, device=self.device)
         
         # 2. Solve linear system
-        if 'cuda' in str(self.device) and G_np.shape[0] < 20000:
+        if 'cuda' in str(self.device):
             print("  solving linear system (GPU)...")
             G_torch = torch.from_numpy(G_np).to(self.device)
             # A = G + lambda * I
@@ -42,15 +42,11 @@ class LAE(BaseModel):
             
             del G_torch, A_torch, G_np
         else:
-            print("  solving linear system (CPU)...")
+            print("  [Warning] CUDA not available, falling back to CPU...")
             # G_np is already a fresh copy from compute_gram_matrix
             A_np = G_np
             A_np[np.diag_indices_from(A_np)] += self.reg_lambda
             
-            # G_np를 보존해야 하므로, compute_gram_matrix에서 하나 더 가져옴 (Sparse 캐시 활용)
-            # 하지만 메모리 아끼기 위해 A_np 수정 전의 G를 다시 확보하는 대신...
-            # A_np = G + lambda*I 이므로 G = A_np - lambda*I 임을 이용하거나
-            # 그냥 원본을 다시 불러오기 (Sparse->Dense는 빠름)
             G_orig = compute_gram_matrix(X_sp, data_loader) 
 
             try:

@@ -29,7 +29,7 @@ class DLAE(BaseModel):
         p = min(self.dropout_p, 0.99)
         dropout_penalty = (p / (1.0 - p)) * np.diag(G_np)
         
-        if 'cuda' in str(self.device) and G_np.shape[0] < 20000:
+        if 'cuda' in str(self.device):
             print("  solving linear system (GPU)...")
             G_rhs = torch.from_numpy(G_np).to(self.device)
             G_lhs = G_rhs.clone()
@@ -39,7 +39,7 @@ class DLAE(BaseModel):
             
             del G_lhs, G_rhs, G_np, dropout_penalty
         else:
-            print("  solving linear system (CPU)...")
+            print("  [Warning] CUDA not available, falling back to CPU...")
             # G_np is already a fresh copy
             G_lhs = G_np
             G_lhs[np.diag_indices_from(G_lhs)] += (dropout_penalty + self.reg_lambda)

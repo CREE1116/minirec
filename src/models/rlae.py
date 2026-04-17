@@ -22,7 +22,7 @@ class RLAE(BaseModel):
         self.train_matrix_cpu = X_sp.tocsr()
         G_np = compute_gram_matrix(X_sp, data_loader, device=self.device)
         
-        if 'cuda' in str(self.device) and G_np.shape[0] < 20000:
+        if 'cuda' in str(self.device):
             print("  inverting matrix (GPU)...")
             G_torch = torch.from_numpy(G_np).to(self.device)
             del G_np
@@ -40,7 +40,7 @@ class RLAE(BaseModel):
             self.weight_matrix.diagonal().add_(1.0)
             del P
         else:
-            print("  inverting matrix (CPU)...")
+            print("  [Warning] CUDA not available, falling back to CPU...")
             # G_np is already a fresh copy
             A = G_np
             A[np.diag_indices_from(A)] += self.reg_lambda
@@ -91,7 +91,7 @@ class RDLAE(BaseModel):
         dropout_penalty_np = (p / (1.0 - p)) * np.diag(G_np)
         lambda_diag_np = dropout_penalty_np + self.reg_lambda
         
-        if 'cuda' in str(self.device) and G_np.shape[0] < 20000:
+        if 'cuda' in str(self.device):
             print("  inverting matrix (GPU)...")
             G_torch = torch.from_numpy(G_np).to(self.device)
             lambda_diag = torch.from_numpy(lambda_diag_np).to(self.device).float()
@@ -110,7 +110,7 @@ class RDLAE(BaseModel):
             self.weight_matrix.diagonal().add_(1.0)
             del P
         else:
-            print("  inverting matrix (CPU)...")
+            print("  [Warning] CUDA not available, falling back to CPU...")
             # G_np is already a fresh copy
             A = G_np
             A[np.diag_indices_from(A)] += lambda_diag_np

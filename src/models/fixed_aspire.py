@@ -40,7 +40,7 @@ class FixedAspire(BaseModel):
         gc.collect()
 
         # ── Step 4: EASE solver ────────────────────────────────────────
-        if 'cuda' in str(self.device) and G_tilde_np.shape[0] < 20000:
+        if 'cuda' in str(self.device):
             print("  Solving EASE closed-form (GPU)...")
             G_torch = torch.from_numpy(G_tilde_np).to(self.device)
             del G_tilde_np
@@ -55,7 +55,7 @@ class FixedAspire(BaseModel):
             self.weight_matrix.diagonal().zero_()
             del P_torch
         else:
-            print("  Solving EASE closed-form (CPU)...")
+            print("  [Warning] CUDA not available, falling back to CPU...")
             G_tilde_np[np.diag_indices_from(G_tilde_np)] += self.reg_lambda
             P_np = np.linalg.inv(G_tilde_np)
             del G_tilde_np

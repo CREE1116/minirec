@@ -101,7 +101,7 @@ class EASE_DAN(BaseModel):
         del X_T_weighted
         gc.collect()
 
-        if 'cuda' in str(self.device) and G_np.shape[0] < 20000:
+        if 'cuda' in str(self.device):
             print("  inverting matrix (GPU)...")
             G_torch = torch.from_numpy(G_np).to(self.device)
             del G_np
@@ -122,7 +122,7 @@ class EASE_DAN(BaseModel):
             self.weight_matrix.diagonal().zero_()
             del W_gpu, item_power
         else:
-            print("  inverting matrix (CPU)...")
+            print("  [Warning] CUDA not available, falling back to CPU...")
             G_np[np.diag_indices(self.n_items)] += self.reg_p
             P = np.linalg.inv(G_np)
             del G_np
@@ -203,7 +203,7 @@ class DLAE_DAN(BaseModel):
         p_val = min(self.dropout_p, 0.99)
         lmbda_eff_np = self.reg_p + (p_val / (1.0 - p_val + self.eps)) * item_counts
         
-        if 'cuda' in str(self.device) and G_dan_np.shape[0] < 20000:
+        if 'cuda' in str(self.device):
             print("  solving linear system (GPU)...")
             G_rhs = torch.from_numpy(G_dan_np).to(self.device)
             G_lhs = G_rhs.clone()
@@ -218,7 +218,7 @@ class DLAE_DAN(BaseModel):
             self.weight_matrix.diagonal().zero_()
             del W_gpu, item_power
         else:
-            print("  solving linear system (CPU)...")
+            print("  [Warning] CUDA not available, falling back to CPU...")
             G_lhs = G_dan_np.copy()
             G_lhs[np.diag_indices(self.n_items)] += lmbda_eff_np
             

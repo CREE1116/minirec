@@ -40,7 +40,7 @@ class IPS_LAE(BaseModel):
         G_np = compute_gram_matrix(X_sp, data_loader, device=self.device)
         
         # 2. Ridge Inversion
-        if 'cuda' in str(self.device) and G_np.shape[0] < 20000:
+        if 'cuda' in str(self.device):
             print("  inverting matrix (GPU)...")
             G_torch = torch.from_numpy(G_np).to(self.device)
             del G_np
@@ -55,7 +55,7 @@ class IPS_LAE(BaseModel):
             B_gpu.diagonal().zero_()
             del P_torch
         else:
-            print("  inverting matrix (CPU)...")
+            print("  [Warning] CUDA not available, falling back to CPU...")
             G_np[np.diag_indices_from(G_np)] += self.reg_lambda
             P_np = np.linalg.inv(G_np)
             del G_np

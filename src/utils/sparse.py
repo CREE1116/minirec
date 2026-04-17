@@ -41,16 +41,7 @@ def compute_gram_matrix(X, data_loader=None, weights=None, item_weights=None, bl
     dataset_name = getattr(data_loader, 'dataset_name', 'default') if data_loader else 'unknown'
     n_users, n_items = X.shape
     
-    # 1. Cache Check (Only cache the final DENSE matrix to avoid sparse overhead)
-    # We use a combined key to distinguish between EASE (no weights) and Aspire (weighted)
-    cache_id = 'G_dense_EASE' if weights is None else 'G_dense_Weighted'
-    cache_key = (dataset_name, cache_id, (n_users, n_items))
-    
-    if cache_key in _GLOBAL_SPARSE_CACHE:
-        print(f"[SparseUtil] Returning cached Dense Gram for {dataset_name}...")
-        return _GLOBAL_SPARSE_CACHE[cache_key].copy()
-
-    print(f"[SparseUtil] Computing Block-wise Dense Gram for {dataset_name} ({n_items} items) on CPU...")
+    print(f"[SparseUtil] Computing Block-wise Dense Gram for {dataset_name} ({n_items} items) on CPU (No Caching)...")
     
     # 2. Prepare Result Matrix (Pre-allocate 8.3GB for float32)
     G = np.zeros((n_items, n_items), dtype=np.float32)
@@ -94,7 +85,6 @@ def compute_gram_matrix(X, data_loader=None, weights=None, item_weights=None, bl
         if start % (block_size * 4) == 0:
             gc.collect()
 
-    _GLOBAL_SPARSE_CACHE[cache_key] = G
     print(f"[SparseUtil] Dense Gram computation complete. Peak RAM used: ~{10 + (n_items*n_users*4/1e9):.1f}GB")
     
-    return G.copy()
+    return G

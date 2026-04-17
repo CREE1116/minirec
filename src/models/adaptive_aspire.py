@@ -12,12 +12,11 @@ class AdaptiveAspire(BaseModel):
         self.weight_matrix = None
 
     def fit(self, data_loader):
-        print(f"Fitting Adaptive ASPIRE on CPU (Simple Style)...")
+        print(f"Fitting Adaptive ASPIRE on CPU (Minimal Copy)...")
 
         # 1. Get training data
         X_sp = get_train_matrix_scipy(data_loader) 
         self.train_matrix_cpu = X_sp.tocsr() 
-        U, I = X_sp.shape
 
         # 2. Compute Statistics (float32)
         d_u = np.asarray(X_sp.sum(axis=1)).ravel().astype(np.float32)
@@ -41,34 +40,34 @@ class AdaptiveAspire(BaseModel):
         
         # Pre-calculate user weights
         u_weights = np.power(d_u + self.eps, -gamma_u).astype(np.float32)
-        del d_u, d_bar_u, d_bar_u_raw, log_du, log_dbar, gamma_u_star, gamma_u
+        
+        # item_weights for compute_gram_matrix result is D_i G D_i
+        i_weights = np.power(d_i + self.eps, -0.5).astype(np.float32)
+        
+        del d_u, d_i, d_bar_u, d_bar_u_raw, log_du, log_dbar, gamma_u_star, gamma_u
         gc.collect()
 
-        # 4. Gram Matrix (Direct Simple)
+        # 4. Gram Matrix
         print("  computing gram matrix...")
-        # G = (X.T @ diag(w) @ X)
-        # item_weights for compute_gram_matrix is D_i, result is D_i G D_i
-        i_weights = np.power(d_i + self.eps, -0.5).astype(np.float32)
         G_np = compute_gram_matrix(X_sp, data_loader, weights=u_weights, item_weights=i_weights)
-        
-        del u_weights, i_weights, d_i
+        del u_weights, i_weights
         gc.collect()
 
         # 5. Inversion (NumPy inv)
         print("  inverting matrix (NumPy)...")
         G_np[np.diag_indices_from(G_np)] += self.reg_lambda
-        P_np = np.linalg.inv(G_np).astype(np.float32)
+        P_np = np.linalg.inv(G_np)
         del G_np
         gc.collect()
 
         # 6. Weights
-        diag_P = np.diag(P_np).astype(np.float32)
-        W_np = (-P_np / (diag_P[np.newaxis, :] + self.eps)).astype(np.float32)
-        np.fill_diagonal(W_np, 0)
-        del P_np, diag_P
+        diag_P = np.diag(P_np)
+        P_np /= -(diag_P + self.eps)
+        np.fill_diagonal(P_np, 0)
+        del diag_P
         
-        self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)
-        del W_np
+        self.weight_matrix = torch.tensor(P_np, dtype=torch.float32, device=self.device)
+        del P_np
         gc.collect()
 
         if 'cuda' in str(self.device): torch.cuda.empty_cache()

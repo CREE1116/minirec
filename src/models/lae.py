@@ -16,7 +16,7 @@ class LAE(BaseModel):
         self.weight_matrix = None
 
     def fit(self, data_loader):
-        print(f"Fitting LAE (lambda={self.reg_lambda}) on CPU using NumPy inv...")
+        print(f"Fitting LAE (lambda={self.reg_lambda}) on CPU (Minimal Copy)...")
         
         # 1. Load data
         X_sp = get_train_matrix_scipy(data_loader)
@@ -27,31 +27,27 @@ class LAE(BaseModel):
         gc.collect()
         
         # 2. Solve via Inverse: W = inv(G + lambda*I) @ G
-        print("  inverting matrix (NumPy float32)...")
-        A_np = G_np.astype(np.float32)
+        print("  inverting matrix (NumPy)...")
+        A_np = G_np.copy() # Need to keep G_np for matmul later
         A_np[np.diag_indices_from(A_np)] += self.reg_lambda
         
-        # inv(A)
-        A_inv = np.linalg.inv(A_np).astype(np.float32)
+        A_inv = np.linalg.inv(A_np)
         del A_np
         gc.collect()
         
         # W = A_inv @ G
         print("  finalizing weight matrix (matmul)...")
-        G_orig = compute_gram_matrix(X_sp, data_loader).astype(np.float32)
-        W_np = (A_inv @ G_orig).astype(np.float32)
+        W_np = (A_inv @ G_np)
         
         # 3. Transfer to GPU and clean up
         self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)
-        del A_inv, G_orig, W_np, G_np
+        del A_inv, W_np, G_np
         gc.collect()
 
-        if 'cuda' in str(self.device):
-            torch.cuda.empty_cache()
+        if 'cuda' in str(self.device): torch.cuda.empty_cache()
         print("LAE fitting complete.")
 
     def forward(self, user_indices):
-        """Memory-efficient hybrid inference"""
         return self._get_batch_ratings(user_indices, self.weight_matrix)
 
     def calc_loss(self, batch_data):

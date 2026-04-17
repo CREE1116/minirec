@@ -31,10 +31,10 @@ class RLAE(BaseModel):
         del A
         
         diag_P = np.diag(P).astype(np.float32)
-        penalty = np.maximum(self.reg_lambda, (1.0 - self.b) / (diag_P + self.eps)).astype(np.float32)
+        penalty = np.maximum(self.reg_lambda, (np.float32(1.0) - self.b) / (diag_P + np.float32(self.eps))).astype(np.float32)
         
         W = (-P * penalty[np.newaxis, :]).astype(np.float32)
-        W[np.diag_indices_from(W)] += 1.0
+        W[np.diag_indices_from(W)] += np.float32(1.0)
         
         self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)
         del P, W
@@ -70,7 +70,7 @@ class RDLAE(BaseModel):
         G_np = compute_gram_matrix(X_sp, data_loader).astype(np.float32)
         
         p = min(self.dropout_p, 0.99)
-        dropout_penalty_np = ((p / (1.0 - p)) * np.diag(G_np)).astype(np.float32)
+        dropout_penalty_np = ((np.float32(p) / (np.float32(1.0) - np.float32(p))) * np.diag(G_np)).astype(np.float32)
         lambda_diag_np = (dropout_penalty_np + self.reg_lambda).astype(np.float32)
         
         # G_np is already a fresh copy
@@ -82,10 +82,10 @@ class RDLAE(BaseModel):
         del A
         
         diag_P = np.diag(P).astype(np.float32)
-        total_penalty = np.maximum(lambda_diag_np, (1.0 - self.b) / (diag_P + self.eps)).astype(np.float32)
+        total_penalty = np.maximum(lambda_diag_np, (np.float32(1.0) - self.b) / (diag_P + np.float32(self.eps))).astype(np.float32)
         
         W = (-P * total_penalty[np.newaxis, :]).astype(np.float32)
-        W[np.diag_indices_from(W)] += 1.0
+        W[np.diag_indices_from(W)] += np.float32(1.0)
         
         self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)
         del P, W

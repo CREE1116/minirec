@@ -65,8 +65,8 @@ class AdaptiveAspire(BaseModel):
         del G_tilde_np
         gc.collect()
 
-        P_diag = np.diag(P_np)
-        W_np = -P_np / (P_diag[np.newaxis, :] + self.eps)
+        P_diag = np.diag(P_np).astype(np.float32)
+        W_np = (-P_np / (P_diag[np.newaxis, :] + np.float32(self.eps))).astype(np.float32)
         np.fill_diagonal(W_np, 0)
         
         self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)

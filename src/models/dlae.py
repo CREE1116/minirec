@@ -27,12 +27,12 @@ class DLAE(BaseModel):
         
         # 2. Add Dropout Penalty: diag += (p/(1-p)) * G_jj
         p = min(self.dropout_p, 0.99)
-        dropout_penalty = (p / (1.0 - p)) * np.diag(G_np)
+        dropout_penalty = ((np.float32(p) / (np.float32(1.0) - np.float32(p))) * np.diag(G_np)).astype(np.float32)
         
         # 3. Solve linear system on CPU (NumPy)
         print("  solving linear system (CPU NumPy)...")
         # G_np is already a fresh copy
-        G_lhs = G_np
+        G_lhs = G_np.astype(np.float32)
         G_lhs[np.diag_indices_from(G_lhs)] += (dropout_penalty + self.reg_lambda)
         
         # G_orig 확보 (RHS 용)

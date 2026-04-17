@@ -42,12 +42,12 @@ class FixedAspire(BaseModel):
         # ── Step 4: EASE solver (CPU NumPy) ────────────────────────────
         print("  Solving EASE closed-form (CPU NumPy)...")
         G_tilde_np[np.diag_indices_from(G_tilde_np)] += self.reg_lambda
-        P_np = np.linalg.inv(G_tilde_np)
+        P_np = np.linalg.inv(G_tilde_np).astype(np.float32)
         del G_tilde_np
         gc.collect()
 
-        P_diag = np.diag(P_np)
-        W_np = -P_np / (P_diag[np.newaxis, :] + self.eps)
+        P_diag = np.diag(P_np).astype(np.float32)
+        W_np = (-P_np / (P_diag[np.newaxis, :] + np.float32(self.eps))).astype(np.float32)
         np.fill_diagonal(W_np, 0)
 
         self.weight_matrix = torch.tensor(W_np, dtype=torch.float32, device=self.device)

@@ -34,15 +34,15 @@ def edge_homophily(X: sparse.csr_matrix,
     degree = np.diag(G_np).copy().astype(np.float32)
     degree_sum = (degree[:, None] + degree[None, :]).astype(np.float32)
 
-    denom = np.where(degree_sum - G_np == 0, 1e-12, degree_sum - G_np).astype(np.float32)
+    denom = np.where(degree_sum - G_np == 0, np.float32(1e-12), degree_sum - G_np).astype(np.float32)
     sim = (G_np / denom).astype(np.float32)
 
     min_deg = np.where(
         np.minimum(degree[:, None], degree[None, :]) == 0,
-        1e-12,
+        np.float32(1e-12),
         np.minimum(degree[:, None], degree[None, :])
     ).astype(np.float32)
-    w = ((G_np ** volume_weight_exp) * (G_np / min_deg)).astype(np.float32)
+    w = ((G_np ** np.float32(volume_weight_exp)) * (G_np / min_deg)).astype(np.float32)
 
     mask = np.triu(np.ones_like(G_np, dtype=bool), k=1) & (w > 0)
     num = (w * sim)[mask].sum()
@@ -82,39 +82,39 @@ class EASE_DAN(BaseModel):
         user_counts = np.array(X_sp.sum(axis=1)).flatten().astype(np.float32)
 
         gini = gini_coefficient(item_counts)
-        alpha = self.alpha_config if self.alpha_config is not None else gini
+        alpha = np.float32(self.alpha_config if self.alpha_config is not None else gini)
         
         if self.beta_config is None:
             print("  computing edge homophily for beta (CPU)...")
-            beta = edge_homophily(X_sp, self.volume_weight_exp, self.max_items_hom)
+            beta = np.float32(edge_homophily(X_sp, self.volume_weight_exp, self.max_items_hom))
         else:
-            beta = self.beta_config
+            beta = np.float32(self.beta_config)
             
         print(f"  Gini={gini:.4f}, α={alpha:.4f}, β={beta:.4f}")
 
         # 2. 유저 정규화 (X_tilde = D_U^{-β} X)
         print("  computing gram matrix with user normalization (CPU Sparse)...")
-        u_weights = np.power(user_counts + self.eps, -beta).reshape(-1, 1).astype(np.float32)
+        u_weights = np.power(user_counts + np.float32(self.eps), -beta).reshape(-1, 1).astype(np.float32)
         X_T_weighted = X_sp.multiply(u_weights).T
         G_np = X_T_weighted.dot(X_sp).toarray().astype(np.float32)
         
         del X_T_weighted, u_weights
         gc.collect()
 
-        print("  inverting matrix (CPU NumPy)...")
+        print("  inverting matrix (CPU NumPy float32)...")
         G_np[np.diag_indices(self.n_items)] += self.reg_p
-        P = np.linalg.inv(G_np)
+        P = np.linalg.inv(G_np).astype(np.float32)
         del G_np
         gc.collect()
         
         diag_P = np.diag(P).astype(np.float32)
-        W = (-P / (diag_P.reshape(1, -1) + self.eps)).astype(np.float32)
+        W = (-P / (diag_P.reshape(1, -1) + np.float32(self.eps))).astype(np.float32)
         np.fill_diagonal(W, 0)
         del P
         
         # 5. 아이템 정규화 (CPU)
-        item_power = np.power(item_counts + self.eps, -alpha).astype(np.float32)
-        W = (W * (1.0 / (item_power + self.eps)).reshape(-1, 1) * item_power.reshape(1, -1)).astype(np.float32)
+        item_power = np.power(item_counts + np.float32(self.eps), -alpha).astype(np.float32)
+        W = (W * (np.float32(1.0) / (item_power + np.float32(self.eps))).reshape(-1, 1) * item_power.reshape(1, -1)).astype(np.float32)
         np.fill_diagonal(W, 0)
 
         self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)
@@ -160,19 +160,19 @@ class DLAE_DAN(BaseModel):
         user_counts = np.array(X_sp.sum(axis=1)).flatten().astype(np.float32)
 
         gini = gini_coefficient(item_counts)
-        alpha = self.alpha_config if self.alpha_config is not None else gini
+        alpha = np.float32(self.alpha_config if self.alpha_config is not None else gini)
         
         if self.beta_config is None:
             print("  computing edge homophily for beta (CPU)...")
-            beta = edge_homophily(X_sp, self.volume_weight_exp, self.max_items_hom)
+            beta = np.float32(edge_homophily(X_sp, self.volume_weight_exp, self.max_items_hom))
         else:
-            beta = self.beta_config
+            beta = np.float32(self.beta_config)
             
         print(f"  Gini={gini:.4f}, α={alpha:.4f}, β={beta:.4f}")
 
         # 1. 유저 정규화
         print("  computing gram matrix with user normalization (CPU Sparse)...")
-        u_weights = np.power(user_counts + self.eps, -beta).reshape(-1, 1).astype(np.float32)
+        u_weights = np.power(user_counts + np.float32(self.eps), -beta).reshape(-1, 1).astype(np.float32)
         X_T_weighted = X_sp.multiply(u_weights).T
         G_dan_np = X_T_weighted.dot(X_sp).toarray().astype(np.float32)
         
@@ -181,9 +181,9 @@ class DLAE_DAN(BaseModel):
 
         # 2. DLAE Dropout 규제
         p_val = min(self.dropout_p, 0.99)
-        lmbda_eff_np = (self.reg_p + (p_val / (1.0 - p_val + self.eps)) * item_counts).astype(np.float32)
+        lmbda_eff_np = (self.reg_p + (np.float32(p_val) / (np.float32(1.0) - np.float32(p_val) + np.float32(self.eps))) * item_counts).astype(np.float32)
         
-        print("  solving linear system (CPU NumPy)...")
+        print("  solving linear system (CPU NumPy float32)...")
         G_lhs = G_dan_np.copy().astype(np.float32)
         G_lhs[np.diag_indices(self.n_items)] += lmbda_eff_np
         
@@ -191,8 +191,8 @@ class DLAE_DAN(BaseModel):
         del G_lhs, G_dan_np
         
         # 3. 아이템 정규화 후처리
-        item_power = np.power(item_counts + self.eps, -alpha).astype(np.float32)
-        W = (W * (1.0 / (item_power + self.eps)).reshape(-1, 1) * item_power.reshape(1, -1)).astype(np.float32)
+        item_power = np.power(item_counts + np.float32(self.eps), -alpha).astype(np.float32)
+        W = (W * (np.float32(1.0) / (item_power + np.float32(self.eps))).reshape(-1, 1) * item_power.reshape(1, -1)).astype(np.float32)
         np.fill_diagonal(W, 0)
 
         self.weight_matrix = torch.tensor(W, dtype=torch.float32, device=self.device)
